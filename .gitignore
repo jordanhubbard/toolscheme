@@ -1,0 +1,4 @@
+toolscheme_test
+toolscheme_test_san
+*.o
+*.dSYM/
