@@ -15,6 +15,8 @@ The production interpreter remains centered on `toolscheme.cpp` and `toolscheme.
 - Keep toolscheme permissively licensed. Full shell compatibility is supplied by host callbacks rather than embedded GPL shell implementations.
 - Support macOS, Linux, and a portable POSIX core. Platform-specific operations return structured unsupported-platform results.
 - Prefer typed arguments and structured results over command-line token parsing and formatted terminal output.
+- Require every primitive result to have a canonical, proper, readable Scheme representation that can be parsed and evaluated again.
+- Require every primitive's behavior, options, limits, and capability references to be expressible through its own explicit arguments rather than hidden command-line or process-global state.
 
 ## Language And Storage Contract
 
@@ -29,9 +31,57 @@ The production interpreter remains centered on `toolscheme.cpp` and `toolscheme.
 - Returned values remain valid after their originating interpreter is destroyed.
 - Only `#f` is false. Nil, booleans, integers, floats, characters, and unspecified values should be immediate values without per-value allocation.
 
+## Read, Write, And Eval Contract
+
+Toolscheme must support generated Scheme as a first-class interchange format. One interpreter or command must be able to emit canonical Scheme source that another interpreter can read and evaluate directly.
+
+```scheme
+(write-to-string '(+ 1 2))
+; => "(+ 1 2)"
+
+(eval (read-from-string "(+ 1 2)"))
+; => 3
+```
+
+Required primitives:
+
+```text
+read read-from-string write write-to-string eval
+```
+
+Rules:
+
+- `read` and `read-from-string` return Scheme data without evaluating it.
+- `write` and `write-to-string` produce canonical, escaped, round-trippable Scheme source rather than diagnostic text.
+- `eval` accepts parsed Scheme data and an optional explicit environment argument. With no environment argument it uses a documented interaction environment.
+- Source emitted by `write` must satisfy `equal?` after a write/read round trip for every readable value.
+- Procedures, active jobs, file handles, sessions, terminals, and other runtime-bound opaque resources are not silently printed as unreadable `#<...>` tokens. A primitive returning such a resource must emit an evaluable reference form, such as a runtime-validated handle lookup expression, or return a structured non-serializable error when transfer is impossible.
+- Serialized capability and handle references remain unforgeable, scoped, revocable, and runtime-validated. Evaluating a stale or foreign reference returns a proper structured error list.
+- Every primitive returns a proper list whose canonical written form is valid Scheme source and can be evaluated to reconstruct the result data or a validated reference to its runtime-bound resource.
+- Every primitive accepts all behavior-controlling values through explicit Scheme arguments, including operation, options, limits, input, destination, environment, capability, and async mode where applicable.
+- Every primitive can permute its supported behavior through typed option arguments, including selecting canonical data, evaluable source, or an evaluable expression result when those output modes are meaningful. Output-mode selection never changes the proper-list result envelope.
+- Primitive defaults are documented and expand to the same behavior as their explicit argument form; no primitive depends on ambient process arguments, implicit standard streams, process-global working directory, or unrestricted host state.
+- Generated-code handoff must work both within one interpreter and between independent interpreter instances when the result contains only transferable data.
+
+For example, a primitive may expose explicit output behavior without introducing a separate textual CLI:
+
+```scheme
+(pwd '((output data)))
+; => ((path "/workspace"))
+
+(pwd '((output source)))
+; => ((source "((path \"/workspace\"))"))
+
+(eval (read-from-string
+       (list-ref (list-ref (pwd '((output source))) 1) 2)))
+; => ((path "/workspace"))
+```
+
+The exact option record may be specialized by primitive, but every supported permutation must be discoverable, typed, serializable, and supplied through arguments.
+
 ## Utility Result Contract
 
-Every utility returns a proper list. Results are tool-specific but use common association-list conventions.
+Every utility returns a proper list. Results are tool-specific but use common association-list conventions. The complete result must have a canonical written representation that is valid, evaluable Scheme.
 
 ```scheme
 (pwd)
@@ -51,7 +101,7 @@ Every utility returns a proper list. Results are tool-specific but use common as
 ; => ((job #<job:1>) (state running))
 ```
 
-Opaque jobs, files, directory streams, terminals, editor sessions, and shell sessions are unforgeable values wrapped in result lists. Handles carry runtime identity, capability identity, resource kind, generation, and a host-owned resource token.
+Opaque jobs, files, directory streams, terminals, editor sessions, and shell sessions are unforgeable values wrapped in result lists. Handles carry runtime identity, capability identity, resource kind, generation, and a host-owned resource token. Their written form must be an evaluable, runtime-validated reference expression rather than unreadable diagnostic syntax.
 
 ## Capability Architecture
 
@@ -301,6 +351,9 @@ Stateful shell sessions are host-backed opaque handles. All session operations r
 - Add a lexer with source filename, offset, line, and column tracking.
 - Parse numeric-looking tokens deterministically and reject unsupported or overflowing forms.
 - Implement a readable, escaped, round-trippable writer.
+- Add `read`, `read-from-string`, `write`, `write-to-string`, and Scheme-visible `eval` with explicit environment semantics.
+- Enforce canonical evaluable output for every primitive, including safe evaluable references for runtime-bound handles.
+- Make every primitive's behavior fully selectable through explicit Scheme arguments and document all defaults.
 - Add checked integer arithmetic and precision-safe numeric comparisons.
 - Complete tail dispatch through procedure bodies, `if`, `begin`, `and`, and `or`.
 - Make environment traversal iterative.
@@ -330,6 +383,9 @@ Objects map to ordered association lists.
 - Test empty, large, improper, sliced, and randomly indexed lists.
 - Test UTF-8 bytes, embedded NULs, escapes, strings larger than 255 bytes, 1-based indexing, and native length headers.
 - Test integer boundaries, overflow, mixed comparisons, values above `2^53`, fractional floats, and writer/parser round trips.
+- Test `eval` over data produced by `read`, `read-from-string`, `write`, and `write-to-string` in the same and independent interpreter instances.
+- Enumerate every registered primitive and verify its success and error results are proper lists whose canonical output parses and evaluates correctly.
+- Verify every primitive's supported behavior and options can be selected solely through explicit arguments, with no dependence on ambient command-line or process-global state.
 - Test closures, recursion, mutual recursion, rest arguments, deep environments, and at least one million tail calls.
 - Test values and handles that survive interpreter destruction.
 - Test every capability-denial path and ensure denied callbacks cannot reach host APIs.
@@ -376,6 +432,8 @@ Performance targets:
 24. Add registration groups and capability-denial behavior.
 25. Add comprehensive correctness, security, ownership, fuzz, sanitizer, portability, and performance tests.
 26. Document the public API, typed primitive signatures, result schemas, capability policy, platform support, and delegated-tool boundary.
+27. Add executable functionality tests and working examples for every registered primitive, with registry-completeness enforcement.
+28. Implement `read`, `read-from-string`, `write`, `write-to-string`, and Scheme-visible `eval`; enforce proper evaluable output and explicit argument-driven behavior for every primitive.
 
 ## Delivery Order
 
