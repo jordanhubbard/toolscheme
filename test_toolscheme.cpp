@@ -2,7 +2,6 @@
 
 #include <cstring>
 #include <iostream>
-#include <map>
 #include <set>
 
 using toolscheme::Interpreter;
@@ -13,6 +12,9 @@ int failures = 0;
 void check(bool condition, const char* name) { if (!condition) { std::cerr << "FAIL: " << name << '\n'; ++failures; } }
 void equal(Interpreter& vm, std::string_view source, std::string_view expected, const char* name) { try { check(vm.eval(source).to_string() == expected, name); } catch (const std::exception& e) { std::cerr << "FAIL: " << name << ": " << e.what() << '\n'; ++failures; } }
 void error(Interpreter& vm, std::string_view source, std::string_view text, const char* name) { try { vm.eval(source); std::cerr << "FAIL: " << name << ": no error\n"; ++failures; } catch (const std::exception& e) { check(std::string(e.what()).find(text) != std::string::npos, name); } }
+void has(const std::set<std::string>& names, std::initializer_list<const char*> required, const char* test) {
+    for (const char* name : required) check(names.count(name) == 1, test);
+}
 
 struct FakeCapability final : toolscheme::Capability {
     Value invoke(Interpreter& vm, std::string_view operation, const std::vector<Value>& arguments) override {
@@ -67,6 +69,31 @@ int main() {
             ++failures;
         }
     }
+    const auto primitive_names = vm.primitive_names();
+    const std::set<std::string> registered(primitive_names.begin(), primitive_names.end());
+    has(registered, {"file-open", "file-read", "file-write", "file-stat"}, "task-11 file handle surface");
+    has(registered, {"cp", "mv", "rm", "mkdir", "rmdir"}, "task-12 recursive filesystem surface");
+    has(registered, {"glob", "tree", "read-file", "temp-file", "temp-directory"}, "task-13 traversal surface");
+    has(registered, {"comm", "cut", "grep", "head", "sort", "tail", "wc"}, "task-15 text surface");
+    has(registered, {"diff", "diff3", "apply-patch"}, "task-16 diff and patch surface");
+    has(registered, {"echo", "expr", "printf", "test", "date", "env", "hostname"}, "task-17 output and system surface");
+    has(registered, {"ps", "kill", "sleep", "timeout", "stty", "wait4path"}, "task-18 process and terminal surface");
+    has(registered, {"hash", "base64", "gzip", "pax", "tar", "zip"}, "task-19 archive and crypto surface");
+    has(registered, {"ed-open", "ed-command", "ed-buffer", "ed-write", "ed-close"}, "task-21 editor surface");
+    has(registered, {"bash", "sh", "zsh", "csh", "tcsh", "ksh", "dash"}, "task-22 shell surface");
+    has(registered, {"launchctl", "logger", "open"}, "task-23 platform surface");
+    check(vm.write(vm.read("'(generated code)")) == "(quote (generated code))", "task-26 documented host API");
+
+    Value survivor;
+    {
+        Interpreter temporary;
+        survivor = temporary.eval("'(kept 42)");
+    }
+    check(survivor.to_string() == "(kept 42)", "task-03 value lifetime");
+    Interpreter producer;
+    std::string generated = producer.write(producer.eval("'(+ 40 2)"));
+    Interpreter consumer;
+    check(consumer.eval(consumer.read(generated)).as_integer() == 42, "task-28 cross-interpreter eval");
     if (failures) return 1;
     std::cout << "toolscheme tests passed (" << vm.primitive_names().size() << " primitives)\n";
 }
