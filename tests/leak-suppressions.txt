@@ -1,0 +1,6 @@
+# Symbols are interned process-wide so that `eq?` is a pointer comparison and a
+# symbol value stays valid after the interpreter that produced it is destroyed.
+# The table is intentionally immortal; LeakSanitizer sees the retention at exit
+# and reports it. This is the one suppression -- everything else must come back
+# clean.
+leak:toolscheme::Value::symbol

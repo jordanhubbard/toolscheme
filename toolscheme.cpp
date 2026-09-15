@@ -1080,6 +1080,24 @@ struct Interpreter::Impl {
 
     explicit Impl(Interpreter* value) : owner(value) { track(global); }
 
+    // A top-level `(define (f) ...)` stores a closure in the global environment,
+    // and that closure holds a shared_ptr back to the same environment -- so the
+    // global scope is a reference cycle with itself and survives its own
+    // interpreter. Breaking every tracked scope at teardown releases it; without
+    // this, any interpreter that ever defined a procedure leaks its whole global
+    // environment and everything reachable from it.
+    ~Impl() {
+        for (const auto& entry : environments)
+            if (auto scope = entry.lock()) {
+                scope->values.clear();
+                scope->parent.reset();
+            }
+        if (global) {
+            global->values.clear();
+            global->parent.reset();
+        }
+    }
+
     void track(const std::shared_ptr<Environment>& environment) {
         if (environments.size() >= compact_at) compact();
         environments.push_back(environment);
@@ -4961,13 +4979,16 @@ std::string base64_encode(std::string_view bytes) {
 }
 
 bool base64_decode(std::string_view text, std::string& out) {
-    int accumulated = 0, bits = 0;
+    // Unsigned: the accumulator is shifted left by six per symbol, which overflows
+    // a signed int -- undefined behaviour -- once four symbols have been read.
+    std::uint32_t accumulated = 0;
+    int bits = 0;
     for (const char raw : text) {
         if (std::isspace(static_cast<unsigned char>(raw))) continue;
         if (raw == '=') break;
         const char* found = std::strchr(kBase64Alphabet, raw);
         if (!found || raw == 0) return false;
-        accumulated = (accumulated << 6) | static_cast<int>(found - kBase64Alphabet);
+        accumulated = (accumulated << 6) | static_cast<std::uint32_t>(found - kBase64Alphabet);
         bits += 6;
         if (bits >= 8) {
             bits -= 8;

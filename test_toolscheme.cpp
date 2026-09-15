@@ -31,6 +31,29 @@ namespace {
 int failures = 0;
 int checks = 0;
 
+// Stress sizes scale down under a sanitizer build. Instrumented allocation costs
+// roughly 500us per procedure call, so the full-size loops would take hours and a
+// gate nobody can run is not a gate. The shapes still hold at 1/100 scale: 10k
+// tail calls prove the stack does not grow, and a 10k-element list still
+// distinguishes O(1) access from O(n).
+std::int64_t stress(std::int64_t full) {
+    static const std::int64_t divisor = [] {
+        const char* scale = std::getenv("TOOLSCHEME_STRESS_DIVISOR");
+        const long value = scale ? std::strtol(scale, nullptr, 10) : 1;
+        return value > 0 ? static_cast<std::int64_t>(value) : 1;
+    }();
+    const std::int64_t scaled = full / divisor;
+    return scaled > 0 ? scaled : 1;
+}
+
+std::string with_stress(const std::string& source, std::int64_t full) {
+    const std::string marker = "@N@";
+    const std::size_t at = source.find(marker);
+    if (at == std::string::npos) return source;
+    return source.substr(0, at) + std::to_string(stress(full)) +
+           source.substr(at + marker.size());
+}
+
 void check(bool condition, const std::string& name, const std::string& detail = {}) {
     ++checks;
     if (condition) return;
@@ -413,12 +436,17 @@ static void task_05_lists(Interpreter& vm) {
     equal(vm, "(sublist '(1 2 3 4 5) 2 4)", "(2 3 4)", "task-05 sublist view");
 
     // Random access over a large list, built in bulk.
-    vm.eval("(define big (let loop ((n 100000) (acc '())) (if (= n 0) acc (loop (- n 1) (cons n acc)))))");
-    equal(vm, "(length big)", "100000", "task-05 large list length");
+    const std::int64_t big_size = stress(100000);
+    vm.eval(with_stress("(define big (let loop ((n @N@) (acc '())) "
+                        "(if (= n 0) acc (loop (- n 1) (cons n acc)))))", 100000));
+    equal(vm, "(length big)", std::to_string(big_size), "task-05 large list length");
     equal(vm, "(list-ref big 1)", "1", "task-05 large list first element");
-    equal(vm, "(list-ref big 100000)", "100000", "task-05 large list last element");
-    equal(vm, "(list-ref big 54321)", "54321", "task-05 large list random index");
-    raises(vm, "(list-ref big 100001)", "out of range", "task-05 large list out of range");
+    equal(vm, "(list-ref big " + std::to_string(big_size) + ")", std::to_string(big_size),
+          "task-05 large list last element");
+    equal(vm, "(list-ref big " + std::to_string(big_size / 2) + ")",
+          std::to_string(big_size / 2), "task-05 large list random index");
+    raises(vm, "(list-ref big " + std::to_string(big_size + 1) + ")", "out of range",
+           "task-05 large list out of range");
     // Deep structural comparison must not grow the C++ stack.
     equal(vm, "(equal? big (list-copy big))", "#t", "task-05 deep equality iterates the spine");
     raises(vm, "(length (cons 1 2))", "proper list", "task-05 length rejects improper lists");
@@ -493,12 +521,15 @@ static void task_07_numbers(Interpreter& vm) {
 }
 
 static void task_08_evaluator(Interpreter& vm) {
-    equal(vm, "(begin (define (loop n a) (if (= n 0) a (loop (- n 1) (+ a 1)))) (loop 1000000 0))",
-          "1000000", "task-08 one million tail calls");
-    equal(vm, "(let loop ((n 1000000) (a 0)) (if (= n 0) a (loop (- n 1) (+ a 1))))", "1000000",
-          "task-08 one million named-let iterations");
-    equal(vm, "(begin (define (even2 n) (if (= n 0) #t (odd2 (- n 1))))"
-              " (define (odd2 n) (if (= n 0) #f (even2 (- n 1)))) (even2 200000))",
+    equal(vm, with_stress("(begin (define (loop n a) (if (= n 0) a (loop (- n 1) (+ a 1))))"
+                          " (loop @N@ 0))", 1000000),
+          std::to_string(stress(1000000)), "task-08 one million tail calls");
+    equal(vm, with_stress("(let loop ((n @N@) (a 0)) (if (= n 0) a (loop (- n 1) (+ a 1))))",
+                          1000000),
+          std::to_string(stress(1000000)), "task-08 one million named-let iterations");
+    equal(vm, with_stress("(begin (define (even2 n) (if (= n 0) #t (odd2 (- n 1))))"
+                          " (define (odd2 n) (if (= n 0) #f (even2 (- n 1)))) (even2 @N@))",
+                          200000),
           "#t", "task-08 mutual recursion in tail position");
     equal(vm, "(and #t 4)", "4", "task-08 and returns the last value");
     equal(vm, "(or #f 'x)", "x", "task-08 or returns the first true value");

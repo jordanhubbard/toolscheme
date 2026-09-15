@@ -14,10 +14,16 @@ toolscheme_test: $(SOURCES) $(HEADERS) test_toolscheme.cpp tests/primitive_examp
 test: toolscheme_test
 	./toolscheme_test
 
-# AddressSanitizer, UndefinedBehaviorSanitizer, and leak checking over the same suite.
+# AddressSanitizer, UndefinedBehaviorSanitizer, and leak checking over the same
+# suite. Instrumented allocation costs roughly 500us per procedure call, so the
+# stress loops run at 1/100 scale here: the invariants they prove (no stack growth
+# under tail calls, O(1) list access) hold at that size, and the gate finishes in
+# minutes instead of hours. Interned symbols live for the life of the process by
+# design, so that one intentional retention is suppressed rather than reported.
 sanitize: $(SOURCES) $(HEADERS) test_toolscheme.cpp tests/primitive_examples.inc
 	$(CXX) $(SANFLAGS) -I. $(SOURCES) test_toolscheme.cpp -o toolscheme_test_san
-	ASAN_OPTIONS=detect_leaks=1 ./toolscheme_test_san
+	TOOLSCHEME_STRESS_DIVISOR=100 ASAN_OPTIONS=detect_leaks=1 \
+	  LSAN_OPTIONS=suppressions=tests/leak-suppressions.txt ./toolscheme_test_san
 
 toolscheme_fuzz: $(SOURCES) $(HEADERS) tests/fuzz_toolscheme.cpp
 	$(CXX) $(SANFLAGS) -I. $(SOURCES) tests/fuzz_toolscheme.cpp -o $@
