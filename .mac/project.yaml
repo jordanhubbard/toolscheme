@@ -10,7 +10,7 @@ toolchain:
     - c++
     - git
 bootstrap:
-  command: c++ -std=c++17 -O3 -Wall -Wextra -Wpedantic toolscheme.cpp test_toolscheme.cpp -o toolscheme_test
+  command: make toolscheme_test
   creates:
     - toolscheme_test
 test:

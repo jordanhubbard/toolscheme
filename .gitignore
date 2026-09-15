@@ -1,4 +1,7 @@
 toolscheme_test
 toolscheme_test_san
+toolscheme_fuzz
+toolscheme_bench
+toolscheme
 *.o
 *.dSYM/
