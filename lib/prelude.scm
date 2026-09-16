@@ -87,3 +87,25 @@
     (if (or (error? found) (null? (field-ref found 'variables '())))
         #f
         (cadr (car (field-ref found 'variables))))))
+
+;; Keeps the first item of each key and preserves order. Sorting by (key, position)
+;; finds the duplicates; sorting the survivors back by position restores the
+;; sequence, which matters because consecutive-call analysis reads order.
+(define (dedup-keyed pairs)
+  (let* ((indexed (let loop ((i 1) (rest pairs) (out '()))
+                    (if (null? rest)
+                        (reverse out)
+                        (loop (+ i 1) (cdr rest)
+                              (cons (list (car (car rest)) i (cadr (car rest))) out)))))
+         (sorted (list-sort indexed
+                            (lambda (a b)
+                              (if (string=? (car a) (car b))
+                                  (< (cadr a) (cadr b))
+                                  (string<? (car a) (car b))))))
+         (kept (let loop ((rest sorted) (previous #f) (out '()))
+                 (cond ((null? rest) out)
+                       ((and previous (string=? (car (car rest)) previous))
+                        (loop (cdr rest) previous out))
+                       (else (loop (cdr rest) (car (car rest)) (cons (car rest) out))))))
+         (ordered (list-sort kept (lambda (a b) (< (cadr a) (cadr b))))))
+    (map caddr ordered)))

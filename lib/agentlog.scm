@@ -168,12 +168,33 @@
       (let ((file (read-file source (list (list 'limit 67108864)))))
         (if (error? file) "" (field-ref file 'text)))))
 
+;; An agent may invoke a hook more than once for the same event -- this one is
+;; called twice per tool call, a few milliseconds apart with an identical call id --
+;; and a log that takes both at face value doubles every count in every report.
+;; The event is identified by the session, the call and which end of it this is;
+;; anything else keeps its position as its identity and is never dropped.
+(define (record-identity record index)
+  (if (equal? (field-ref record "source" #f) "toolscheme-hook")
+      (string-append (field-ref record "session" "") "|"
+                     (field-ref record "call" "") "|"
+                     (field-ref record "event" ""))
+      (string-append "#" (number->string index))))
+
+(define (dedup-records records)
+  (dedup-keyed
+    (let loop ((i 1) (rest records) (out '()))
+      (if (null? rest)
+          (reverse out)
+          (loop (+ i 1) (cdr rest)
+                (cons (list (record-identity (car rest) i) (car rest)) out))))))
+
 (define (agent-log-events source)
   (let* ((text (agent-log-text source))
-         (records (map (lambda (line)
-                         (let ((parsed (json-parse line)))
-                           (if (error? parsed) '() (field-ref parsed 'value))))
-                       (json-lines text)))
+         (records (dedup-records
+                    (map (lambda (line)
+                           (let ((parsed (json-parse line)))
+                             (if (error? parsed) '() (field-ref parsed 'value))))
+                         (json-lines text))))
          (events (flatten (map (lambda (record)
                                  (if (null? record) '() (events-of-record record)))
                                records))))

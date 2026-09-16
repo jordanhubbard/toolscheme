@@ -69,9 +69,17 @@ type = "command"
 command = "/path/to/toolscheme/hooks/observe.sh"
 ```
 
-Codex requires hooks to be trusted before it will run them; it prompts on first
-use, and `--dangerously-bypass-hook-trust` skips that for automation that already
-vets its hook sources.
+Codex requires a hook to be trusted before it will run it, and **an untrusted hook
+is skipped silently** — `codex exec` completes normally, says nothing about hooks,
+and records nothing. Verified: the same command records two events with
+`--dangerously-bypass-hook-trust` and none without it. Trust once from an
+interactive session; the bypass flag does not persist it.
+
+Codex also reads its configuration at startup, so a session already running when
+the hook is added will never fire it, however long it lives.
+
+One more difference worth knowing when comparing the two: Codex invokes the hook
+once per event. Claude Code invokes it twice.
 
 Verified against Codex 0.154.0: the hook fires, and a rewrite returned as
 `updatedInput` is accepted and executed. Codex normalizes shell calls to
@@ -105,6 +113,23 @@ Three things are worth knowing before doing that:
   in one file, outside any of them.
 
 Nothing rotates or prunes it yet.
+
+## The log is a stream, not a ledger
+
+An agent may invoke a hook more than once for the same event. Claude Code calls
+this one **twice per tool call**, a few milliseconds apart with an identical
+`tool_use_id`, from a single registration. Taking the log at face value therefore
+doubles every count in every report — tool counts, shell calls, repeat rates,
+latency pairing, all of it, silently and plausibly.
+
+So an event is identified by session, call id and which end of the call it is, and
+the reader keeps the first of each. Records from other schemas keep their position
+as their identity and are never dropped. Order survives deduplication, because
+consecutive-call analysis depends on it.
+
+Treat the file as an append-only stream that may repeat itself, not as a list of
+distinct events. That is also what makes it safe for many sessions to append to one
+file with no coordination.
 
 ## The observer must not observe itself
 

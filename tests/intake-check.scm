@@ -37,6 +37,30 @@
 (define codex (agent-log-events codex-text))
 (define codex-call (car (field-ref codex 'events)))
 
+;; An agent may call a hook more than once for the same event. Claude Code calls
+;; this one twice per tool call, milliseconds apart with an identical call id, so a
+;; reader that takes the log at face value doubles every count it reports.
+(define (hook-line call event command)
+  (string-append
+    "{\"source\":\"toolscheme-hook\",\"event\":\"" event "\",\"session\":\"s\","
+    "\"call\":\"" call "\",\"tool\":\"bash\",\"cwd\":\"/w\",\"command\":\"" command "\","
+    "\"input\":\"()\",\"at\":1,\"bytes\":1}\n"))
+
+(define duplicated
+  (agent-log-events
+    (string-append (hook-line "a" "pre" "grep -n x f")
+                   (hook-line "a" "pre" "grep -n x f")
+                   (hook-line "b" "pre" "wc -l f")
+                   (hook-line "b" "pre" "wc -l f")
+                   (hook-line "a" "post" "grep -n x f")
+                   (hook-line "a" "post" "grep -n x f"))))
+
+;; Order has to survive deduplication, because consecutive-call analysis reads it.
+(define deduped-commands
+  (map (lambda (e) (field-ref (field-ref e 'input '()) "command" ""))
+       (filter (lambda (e) (eq? (field-ref e 'kind) 'tool-call))
+               (field-ref duplicated 'events))))
+
 (define flat (agent-log-events flat-text))
 (define nested (agent-log-events nested-text))
 (define both (analyze-events (append (field-ref flat 'events) (field-ref nested 'events))))
@@ -64,6 +88,8 @@
         (list 'cache-visible (field-ref (field-ref both 'cache) 'available))
         (list 'cache-created (field-ref (field-ref both 'cache) 'cache-created-tokens 0))
         (list 'result-bytes-counted (> (field-ref both 'result-bytes) 0))
+        (list 'duplicate-events-collapsed (field-ref duplicated 'count))
+        (list 'order-preserved deduped-commands)
         (list 'codex-command (field-ref (field-ref codex-call 'input '()) "command" ""))
         (list 'codex-workdir (field-ref codex-call 'directory ""))
         (list 'codex-shell-calls (field-ref codex-report 'shell-calls))
@@ -84,4 +110,7 @@
                            "grep -n x f.c | head -20")
                  (string=? (field-ref codex-call 'directory "") "/repo")
                  (= (field-ref codex-report 'shell-calls) 1)
-                 (> (field-ref (field-ref codex-report 'latency) 'total-ms 0) 0))))
+                 (> (field-ref (field-ref codex-report 'latency) 'total-ms 0) 0)
+                 ;; Six lines, three distinct events, in the order they happened.
+                 (= (field-ref duplicated 'count) 3)
+                 (equal? deduped-commands '("grep -n x f" "wc -l f")))))
