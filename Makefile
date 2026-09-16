@@ -5,7 +5,7 @@ SANFLAGS = -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefin
 SOURCES = toolscheme.cpp toolscheme_posix.cpp
 HEADERS = toolscheme.hpp toolscheme_posix.hpp
 
-.PHONY: all test sanitize fuzz bench loop synthesize check clean
+.PHONY: all test sanitize fuzz bench loop synthesize check install uninstall clean
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
@@ -107,6 +107,53 @@ synthesize: toolscheme
 	 fi; \
 	 NVIDIA_INFERENCE_API_KEY="$$key" ./toolscheme tests/synthesize-live.scm '$(TRANSCRIPTS)' $(PATTERN) \
 	   --root "$(HOME)" --lib "$(CURDIR)/lib" --allow-process --allow-program curl $(REPLAY_ALLOW)
+
+# Installing. A hook that only watches one repository can only ever report on that
+# repository, so to observe every session the binary, the library and the hook have
+# to live somewhere outside any checkout, and the agent configuration has to point
+# at an absolute path rather than at ${CLAUDE_PROJECT_DIR}.
+#
+# Observations go to $XDG_STATE_HOME/toolscheme, which is also the sandbox root the
+# hook runs under: it watches every project and can write to none of them.
+PREFIX ?= $(HOME)/.local
+BINDIR = $(PREFIX)/bin
+SHAREDIR = $(PREFIX)/share/toolscheme
+STATEDIR = $${XDG_STATE_HOME:-$(HOME)/.local/state}/toolscheme
+
+install: toolscheme
+	install -d "$(BINDIR)" "$(SHAREDIR)/lib/tools" "$(SHAREDIR)/hooks"
+	install -m 755 toolscheme "$(BINDIR)/toolscheme"
+	install -m 644 lib/*.scm "$(SHAREDIR)/lib/"
+	@if ls lib/tools/*.scm >/dev/null 2>&1; then \
+	   install -m 644 lib/tools/*.scm "$(SHAREDIR)/lib/tools/"; fi
+	install -m 644 hooks/*.scm "$(SHAREDIR)/hooks/"
+	install -m 755 hooks/*.sh "$(SHAREDIR)/hooks/"
+	@echo
+	@echo "installed: $(BINDIR)/toolscheme and $(SHAREDIR)"
+	@echo "observations will go to $(STATEDIR)"
+	@echo
+	@echo "To observe every session, add the handler to your agent configuration."
+	@echo "Neither file is written for you; both are yours to review."
+	@echo
+	@echo "  ~/.claude/settings.json"
+	@echo '    {"hooks": {"PreToolUse": [{"matcher": "*", "hooks":'
+	@echo '      [{"type": "command", "command": "$(SHAREDIR)/hooks/observe.sh", "timeout": 5}]}],'
+	@echo '               "PostToolUse": [{"matcher": "*", "hooks":'
+	@echo '      [{"type": "command", "command": "$(SHAREDIR)/hooks/observe.sh", "timeout": 5}]}]}}'
+	@echo
+	@echo "  ~/.codex/config.toml"
+	@echo '    [[hooks.PreToolUse]]'
+	@echo '    matcher = "*"'
+	@echo '    [[hooks.PreToolUse.hooks]]'
+	@echo '    type = "command"'
+	@echo '    command = "$(SHAREDIR)/hooks/observe.sh"'
+	@echo
+	@echo "Then: toolscheme analyze $(STATEDIR)"
+
+uninstall:
+	rm -f "$(BINDIR)/toolscheme"
+	rm -rf "$(SHAREDIR)"
+	@echo "removed the binary and $(SHAREDIR); observations in $(STATEDIR) are left alone"
 
 clean:
 	rm -f toolscheme toolscheme_test toolscheme_test_san toolscheme_fuzz toolscheme_bench

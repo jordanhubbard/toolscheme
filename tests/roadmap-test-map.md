@@ -28,7 +28,7 @@ hermetic suite.
 | Check | Script | Proves |
 |---|---|---|
 | Log intake | `tests/intake-check.scm` | All four schemas (two Claude, Codex rollouts with their JavaScript-wrapped commands, and the hook) from pasted text, tool names merged across their spellings, cache tokens and the recorded working directory carried through |
-| Live observation | `tests/hook-check.scm` | A hook record keeps the directory, call id and timestamp; a failed call files as a completion rather than a second start; a command with no arguments is still distinguishable; a 20k command clips below the atomic-append limit; malformed input never raises |
+| Live observation | `tests/hook-check.scm` | A hook record keeps the directory, call id and timestamp; a failed call files as a completion rather than a second start; a command with no arguments is still distinguishable; a 20k command clips below the atomic-append limit; a rewritten command is marked and kept out of the shape rankings; malformed input never raises |
 | Rewrite policy | `tests/redirect-check.scm` | An unclaimed command is left alone; a claimed one is rewritten; a partial pipeline, an uncovered command and a destructive one are all left alone; an unbacked claim is refused; Codex's JavaScript wrapper is preserved around the replacement |
 | Proven claims | `tests/proven-check.scm` | Every shape a tool declares proven is recomputed from its recorded cases -- byte-identical output, identical exit status, and faster than the command it replaces -- and a deliberate overclaim is caught |
 | Tool library | `tests/tools-check.scm` | Every published tool carries a name, description, typed and documented parameters, a stability contract, and provenance |

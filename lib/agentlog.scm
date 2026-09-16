@@ -104,7 +104,9 @@
                     (list (list "command" command)))))
     (list (event (if post 'tool-result 'tool-call)
                  tool
-                 input
+                 ;; A rewritten command is toolscheme's own doing, not a choice the
+                 ;; agent made; the call still counts, but its shape is not demand.
+                 (if (field-ref record "rewritten" #f) '() input)
                  (field-ref record "bytes" 0)
                  0 0
                  (field-ref record "cwd" "")

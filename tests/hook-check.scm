@@ -34,6 +34,19 @@
       "\"tool_name\":\"Bash\",\"cwd\":\"/w\",\"tool_input\":{\"command\":\"false\"},"
       "\"tool_response\":{\"type\":\"text\",\"text\":\"exit 1\"}}")))
 
+;; Once redirection is on, a PostToolUse event carries the command toolscheme
+;; substituted, not the one the agent asked for. Counting that as demand would let
+;; the analyzer measure its own output and rank it as a pattern worth replacing.
+(define rewritten
+  (observation-of
+    (string-append
+      "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"s\",\"tool_use_id\":\"c4\","
+      "\"tool_name\":\"Bash\",\"cwd\":\"/w\",\"tool_input\":{\"command\":"
+      "\"/p/toolscheme /p/hooks/run-tool.scm search-read 'grep -n x f' --text\"},"
+      "\"tool_response\":{\"type\":\"text\",\"text\":\"f:1:x\"}}")))
+
+(define rewritten-events (events-of-record (record-of rewritten)))
+
 (define read-call
   (observation-of
     (string-append
@@ -72,6 +85,9 @@
         (list 'latency-available (field-ref latency 'available))
         (list 'failure-is-post (field-ref failure "event" ""))
         (list 'failure-marked-not-ok (field-ref failure "ok" #t))
+        (list 'rewrite-marked (field-ref rewritten "rewritten" #f))
+        (list 'rewrite-not-counted-as-demand
+              (null? (field-ref (car rewritten-events) 'input '())))
         (list 'malformed-survived (not (error? malformed)))))
 
 (list (list 'checks checks)
@@ -87,4 +103,6 @@
                  (eq? (field-ref latency 'available) #t)
                  (string=? (field-ref failure "event" "") "post")
                  (eq? (field-ref failure "ok" #t) #f)
+                 (eq? (field-ref rewritten "rewritten" #f) #t)
+                 (null? (field-ref (car rewritten-events) 'input '()))
                  (not (error? malformed)))))

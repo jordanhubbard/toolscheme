@@ -34,6 +34,17 @@ toolscheme analyze <transcript-dir>  # rank tool-use opportunities from agent lo
 child processes; `--telemetry` records every capability call. Nothing reaches the
 host that the policy did not permit.
 
+## Installing
+
+```sh
+make install                    # ~/.local by default
+make install PREFIX=/usr/local  # or system-wide
+```
+
+A hook that lives in a repository can only watch that repository, so observing
+every session means installing outside any checkout. `make install` prints the
+agent configuration to add; it writes none of it for you.
+
 ## Attaching to an agent
 
 A `PreToolUse` / `PostToolUse` hook records every tool call as it happens: the
@@ -47,7 +58,7 @@ and nothing is installed globally.
 toolscheme analyze ~/.claude/projects     # Claude Code, nested schema
 toolscheme analyze ~/.claude/transcripts  # Claude Code, flat schema
 toolscheme analyze ~/.codex/sessions      # Codex rollouts
-toolscheme analyze .toolscheme            # this project's own hook log
+toolscheme analyze ~/.local/state/toolscheme   # everything the hook has seen
 ```
 
 The hook **observes by default**: it never denies a call, prints nothing, and

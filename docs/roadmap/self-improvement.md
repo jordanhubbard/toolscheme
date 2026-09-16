@@ -209,11 +209,35 @@ for byte: grep prints no path prefix when given a single file, terminates its la
 line, and a pipeline exits with its *last* command's status — so `grep x f` exits 1
 on no match while `grep x f | head -20` exits 0.
 
+A fifth is structural rather than cosmetic: a `PostToolUse` event carries the
+input that actually ran, so after a rewrite the log records toolscheme's own
+invocation as though the agent had chosen it. Those records are marked and their
+commands excluded from the shape rankings, or the loop starts measuring its own
+output and ranking it as demand.
+
 A fourth showed up in the Codex reader. Its tool inputs use JavaScript object
 literals with bare keys, so matching only `cmd:` and not `"cmd":` silently dropped
 a fifth of the shell calls and a third of the `sed -n` invocations — an undercount
 that reads as a finding rather than as a bug. Both spellings occur in the same
 corpus.
+
+## Where it has to live
+
+A hook inside a repository can only report on that repository, because the agent
+configuration names an absolute path to it. `make install` puts the binary, the
+library and the hook under a prefix outside any checkout and prints the
+configuration to add; observations go to `$XDG_STATE_HOME/toolscheme`, which is
+also the sandbox root the hook runs under, so it watches every project and can
+write to none of them.
+
+There is no daemon, and collection does not need one: each hook invocation is a
+short-lived process costing about 2.5 ms. A resident service would remove that
+start-up, which matters in two places and neither is collection. It would improve
+rewriting -- though not enough to have saved `search-read`, which is still slower
+than grep once its start-up is discounted. And it is close to a prerequisite for
+steering, because deciding what to tell a session on the basis of what other
+sessions have already done means having that history in memory rather than
+re-reading a growing log on every tool call.
 
 ## Open
 

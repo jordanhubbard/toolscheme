@@ -21,8 +21,12 @@
       text
       (string-append (substring text 1 limit) "...")))
 
+;; The log lives in the state directory, which is the sandbox root the hook runs
+;; under -- so the path is a bare filename and the hook has write access to that
+;; directory and to nothing else. It observes every project and can touch none of
+;; them.
 (define (hook-log-path)
-  (or (env-value "TOOLSCHEME_OBSERVATIONS") ".toolscheme/observations.jsonl"))
+  (or (env-value "TOOLSCHEME_OBSERVATIONS") "observations.jsonl"))
 
 (define (parent-directory path)
   (let loop ((i (string-length path)))
@@ -54,6 +58,12 @@
           (list "tool" (field-ref request "tool_name" ""))
           (list "cwd" (field-ref request "cwd" ""))
           (list "command" (clip command hook-command-limit))
+          ;; A PostToolUse event carries the *rewritten* input, so once redirection
+          ;; is on the log fills with toolscheme's own invocations presented as
+          ;; commands the agent chose. Left unmarked they feed straight back into
+          ;; the shape rankings that decide what to replace next -- the analyzer
+          ;; measuring its own output and calling it demand.
+          (list "rewritten" (and (string-contains? command "run-tool.scm") #t))
           ;; Enough of the input to tell one invocation from another, which is what
           ;; repeat detection needs; not enough to store the agent's whole payload.
           (list "input" (clip (write-to-string input) hook-input-limit))
