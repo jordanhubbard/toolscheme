@@ -17,3 +17,20 @@ Every roadmap task must add or update a named test before it can close. Test nam
 | 26 | Documentation snippets compiled or executed by tests |
 | 27 | One success and one applicable failure example per registered primitive |
 | 28 | Same-runtime and cross-interpreter `read`/`write`/`eval` round trips |
+| m0 | Path-mode text tools, working directory, find predicates, sed, stability, git front end |
+| m1 | `shell-parse` heredoc/quoting/keyword handling, `platform-facts`, telemetry accounting, published-tool registry |
+
+## Loop coverage (`make loop`)
+
+These need a shell and a network-shaped transport, so they run outside the
+hermetic suite.
+
+| Check | Script | Proves |
+|---|---|---|
+| Log intake | `tests/intake-check.scm` | Both transcript schemas from pasted text, tool names merged across their spellings, cache tokens carried through |
+| Tool library | `tests/tools-check.scm` | Every published tool carries a name, description, typed and documented parameters, a stability contract, and provenance |
+| MCP protocol | `tests/mcp-check.scm` | Handshake, tool listing, a derived JSON Schema that is an object rather than an array of pairs, `isError` on failure, parse and method errors, notifications answered with silence |
+| Synthesis request | `tests/synthesis-check.scm` | Cache breakpoint after the stable prefix, volatile report after it, structured output requested, valid JSON body |
+| Synthesis responses | `tests/synthesis-check.scm` | Refusal, malformed response, and success branches each return a structured result rather than raising |
+| Publication gate | `tests/replay-check.scm` | A real fused tool publishes; a lossy candidate that is stabler *and* cheaper is refused, with the disagreeing line as evidence |
+| Live loop | `tests/synthesize-live.scm` | Transcripts → opportunity → model → replay → published file. Needs `ANTHROPIC_API_KEY`; **unverified** |

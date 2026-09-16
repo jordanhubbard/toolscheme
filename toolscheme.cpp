@@ -438,6 +438,10 @@ private:
         take();
         skip_space();
         std::vector<Value> values;
+        // Growing from empty costs a reallocation per doubling, which dominates the
+        // allocation count for exactly the short lists that make up most source.
+        // One reservation up front covers them; longer lists still double from here.
+        values.reserve(8);
         Value tail = Value::nil();
         while (position_ < source_.size() && source_[position_] != closing) {
             if (source_[position_] == '.' && position_ + 1 < source_.size() &&
@@ -1078,6 +1082,17 @@ struct Interpreter::Impl {
     std::vector<std::weak_ptr<Environment>> environments;
     std::size_t compact_at = 1024;
 
+    struct CallRecord {
+        std::string name;
+        std::int64_t nanoseconds = 0;
+        std::size_t result_bytes = 0;
+        std::string code;      // error code, empty on success
+    };
+    bool telemetry = false;
+    std::vector<CallRecord> calls;
+
+    std::map<std::string, Value> tools;
+
     explicit Impl(Interpreter* value) : owner(value) { track(global); }
 
     // A top-level `(define (f) ...)` stores a closure in the global environment,
@@ -1587,6 +1602,72 @@ std::size_t Interpreter::collect() {
     return reclaimed;
 }
 
+void Interpreter::set_telemetry(bool enabled) { impl_->telemetry = enabled; }
+bool Interpreter::telemetry_enabled() const noexcept { return impl_->telemetry; }
+void Interpreter::clear_telemetry() { impl_->calls.clear(); }
+
+void Interpreter::record_call(std::string_view name, std::int64_t nanoseconds,
+                              std::size_t result_bytes, std::string_view code) {
+    if (!impl_->telemetry) return;
+    Impl::CallRecord record;
+    record.name = std::string(name);
+    record.nanoseconds = nanoseconds;
+    record.result_bytes = result_bytes;
+    record.code = std::string(code);
+    impl_->calls.push_back(std::move(record));
+}
+
+// Aggregated per tool, because the question telemetry answers is which tools cost
+// the most across a session, not what any single call did.
+Value Interpreter::telemetry_summary() const {
+    struct Totals {
+        std::int64_t calls = 0, nanoseconds = 0, bytes = 0, errors = 0;
+    };
+    std::map<std::string, Totals> totals;
+    for (const Impl::CallRecord& record : impl_->calls) {
+        Totals& entry = totals[record.name];
+        entry.calls += 1;
+        entry.nanoseconds += record.nanoseconds;
+        entry.bytes += static_cast<std::int64_t>(record.result_bytes);
+        if (!record.code.empty()) entry.errors += 1;
+    }
+    std::vector<Value> rows;
+    for (const auto& entry : totals)
+        rows.push_back(ok_result({field("tool", entry.first),
+                                  field("calls", entry.second.calls),
+                                  field("total-ms", entry.second.nanoseconds / 1000000),
+                                  field("bytes", entry.second.bytes),
+                                  field("errors", entry.second.errors)}));
+    return ok_result({field("tools", Value::list(std::move(rows))),
+                      field("recorded", static_cast<std::int64_t>(impl_->calls.size())),
+                      field("enabled", impl_->telemetry)});
+}
+
+void Interpreter::publish_tool(std::string_view name, Value definition) {
+    impl_->tools[std::string(name)] = std::move(definition);
+}
+
+Value Interpreter::tool_definition(std::string_view name) const {
+    const auto found = impl_->tools.find(std::string(name));
+    return found == impl_->tools.end() ? Value::boolean(false) : found->second;
+}
+
+// The manifest omits the procedure itself: it describes what an agent may call,
+// and a procedure has no transferable written form.
+Value Interpreter::tool_manifest() const {
+    std::vector<Value> rows;
+    for (const auto& entry : impl_->tools) {
+        ListBuilder row(5);
+        for (const char* key : {"name", "description", "parameters", "provenance", "stability"}) {
+            const Value value = option(entry.second, key);
+            if (value.type() != Value::Type::Unspecified) row.field(key, value);
+        }
+        rows.push_back(row.build());
+    }
+    const std::int64_t count = static_cast<std::int64_t>(rows.size());
+    return ok_result({field("tools", Value::list(std::move(rows))), field("count", count)});
+}
+
 std::size_t Interpreter::live_environments() const {
     std::size_t count = 0;
     for (const auto& entry : impl_->environments)
@@ -1837,6 +1918,7 @@ Value dispatch_capability(Interpreter& interpreter, const char* kind, const char
                                                               operation),
                             options);
     Value result;
+    const auto started = std::chrono::steady_clock::now();
     try {
         result = capability->invoke(interpreter, operation, request);
     } catch (const Error& error) {
@@ -1846,7 +1928,24 @@ Value dispatch_capability(Interpreter& interpreter, const char* kind, const char
     }
     if (!result.is_list())
         fail(std::string(operation) + " capability must return a proper list");
-    return apply_output(interpreter, std::move(result), options);
+    result = apply_output(interpreter, std::move(result), options);
+    // Every capability call passes through here, so this is the one place
+    // telemetry cannot miss one.
+    if (interpreter.telemetry_enabled()) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started);
+        // A failure is the presence of an `error` string, the same test every
+        // other caller uses. Keying on `code` alone would miscount: a successful
+        // HTTP result carries one too.
+        const bool failed = option(result, "error").type() == Value::Type::String;
+        const Value code = option(result, "code");
+        interpreter.record_call(operation, static_cast<std::int64_t>(elapsed.count()),
+                                interpreter.write(result).size(),
+                                failed && code.type() == Value::Type::Symbol
+                                    ? code.as_symbol()
+                                    : std::string_view());
+    }
+    return result;
 }
 
 NativeFunction capability_primitive(const char* kind, const char* operation) {
@@ -1864,6 +1963,7 @@ void register_encoding(Interpreter& interpreter);
 void register_output(Interpreter& interpreter);
 void register_editor(Interpreter& interpreter);
 void register_vcs(Interpreter& interpreter);
+void register_shell_parsing(Interpreter& interpreter);
 void register_group(Interpreter& interpreter, PrimitiveGroup group);
 const std::vector<PrimitiveGroup>& groups_for_kind(std::string_view kind);
 
@@ -1875,6 +1975,7 @@ const std::vector<PrimitiveGroup>& groups_for_kind(std::string_view kind);
 
 Interpreter::Interpreter() : impl_(std::make_unique<Impl>(this)) {
     register_core(*this);
+    register_shell_parsing(*this);
     impl_->enabled.insert(PrimitiveGroup::Core);
 }
 
@@ -5786,6 +5887,384 @@ const std::vector<GroupEntry>& group_table() {
 }
 
 // ---------------------------------------------------------------------------
+// Shell parsing
+// ---------------------------------------------------------------------------
+//
+// Working out which programs an agent actually ran means parsing the command it
+// sent, and that cannot be done with pattern matching. A regex sweep over a real
+// transcript reports `e`, `if`, and `out.field` among the top "commands", because
+// it reads heredoc bodies and quoted source as shell. So: a real tokenizer that
+// tracks quoting, escapes, and heredoc bodies, and reports the pipeline structure.
+
+struct ShellToken {
+    std::string text;
+    bool quoted = false;    // any part of it was inside quotes
+};
+
+struct ShellCommand {
+    std::vector<std::pair<std::string, std::string>> assignments; // VAR=value prefixes
+    std::string program;
+    std::vector<std::string> arguments;
+    std::vector<Value> redirections;
+    std::string connector;  // how this command joins the next: | && || ; &
+    bool header = false;    // a `for`/`case` word list, not a command anyone ran
+};
+
+// Shell grammar words that occupy command position without being programs. The
+// first set precedes a real command the way a VAR=value assignment does, so the
+// program is the next word: `if grep -q x f` runs grep. The second set introduces
+// a word list -- `for f in a b` names no program at all -- so the whole clause is
+// discarded. Getting this wrong is what made a naive scan report `do` and `done`
+// among the busiest tools on a real transcript corpus.
+bool shell_keyword_precedes_command(const std::string& word) {
+    static const std::set<std::string> words = {
+        "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "esac",
+        "time", "!", "{", "}", "[[", "]]"};
+    return words.count(word) != 0;
+}
+
+bool shell_keyword_opens_word_list(const std::string& word) {
+    static const std::set<std::string> words = {"for", "case", "select"};
+    return words.count(word) != 0;
+}
+
+// Reads a heredoc introducer and returns its terminator, or empty if this is not
+// one. `<<-` strips leading tabs on the terminator line; quoting the delimiter
+// suppresses expansion, which does not matter for structure.
+std::string heredoc_terminator(const std::string& token, bool& strip_tabs) {
+    if (token.rfind("<<", 0) != 0 || token.rfind("<<<", 0) == 0) return {};
+    std::size_t at = 2;
+    strip_tabs = at < token.size() && token[at] == '-';
+    if (strip_tabs) ++at;
+    std::string name = token.substr(at);
+    if (name.size() >= 2 && ((name.front() == '\'' && name.back() == '\'') ||
+                             (name.front() == '"' && name.back() == '"')))
+        name = name.substr(1, name.size() - 2);
+    return name;
+}
+
+bool shell_operator_at(const std::string& text, std::size_t at, std::string& found) {
+    static const char* operators[] = {"&&", "||", ">>", "2>", "&>", "|", ";", "&", ">", "<"};
+    for (const char* candidate : operators)
+        if (text.compare(at, std::strlen(candidate), candidate) == 0) {
+            found = candidate;
+            return true;
+        }
+    return false;
+}
+
+// Splits one command line into commands, honouring quotes, escapes, comments and
+// heredoc bodies. Substitutions -- $(...) and `...` -- are kept as single opaque
+// tokens rather than recursed into.
+std::vector<ShellCommand> shell_split(const std::string& source,
+                                      std::vector<std::string>& heredoc_bodies) {
+    std::vector<ShellCommand> commands;
+    ShellCommand current;
+    std::string token;
+    bool have_token = false, token_quoted = false;
+    std::vector<std::pair<std::string, bool>> pending_heredocs;
+    std::string pending_redirection;
+
+    const auto flush_token = [&] {
+        if (!have_token) return;
+        if (!pending_redirection.empty()) {
+            current.redirections.push_back(
+                ok_result({symbol_field("operator", pending_redirection), field("target", token)}));
+            pending_redirection.clear();
+        } else if (current.header) {
+            // Everything left in a `for`/`case` clause is part of its word list.
+        } else if (current.program.empty()) {
+            // A leading NAME=value is an assignment, not the program, and a leading
+            // grammar word is neither.
+            const std::size_t equals = token.find('=');
+            if (!token_quoted && shell_keyword_precedes_command(token)) {
+                // The program is the next word.
+            } else if (!token_quoted && shell_keyword_opens_word_list(token)) {
+                current.header = true;
+            } else if (equals != std::string::npos && !token_quoted && equals > 0 &&
+                       token.find_first_of("/ ") > equals) {
+                current.assignments.emplace_back(token.substr(0, equals), token.substr(equals + 1));
+            } else {
+                current.program = token;
+            }
+        } else {
+            current.arguments.push_back(token);
+        }
+        token.clear();
+        have_token = false;
+        token_quoted = false;
+    };
+    const auto flush_command = [&](const std::string& connector) {
+        flush_token();
+        if (!current.header && (!current.program.empty() || !current.assignments.empty())) {
+            current.connector = connector;
+            commands.push_back(current);
+        }
+        current = ShellCommand();
+    };
+
+    std::size_t i = 0;
+    while (i < source.size()) {
+        const char c = source[i];
+
+        // A newline ends the command, and any heredocs it opened consume the
+        // following lines up to their terminators.
+        if (c == '\n') {
+            flush_command(";");
+            ++i;
+            for (const auto& pending : pending_heredocs) {
+                std::string body;
+                for (;;) {
+                    const std::size_t end = source.find('\n', i);
+                    std::string line = source.substr(i, end == std::string::npos
+                                                            ? std::string::npos : end - i);
+                    std::string trimmed = line;
+                    if (pending.second)
+                        while (!trimmed.empty() && trimmed.front() == '\t')
+                            trimmed.erase(trimmed.begin());
+                    i = end == std::string::npos ? source.size() : end + 1;
+                    if (trimmed == pending.first || end == std::string::npos) break;
+                    body += line;
+                    body += '\n';
+                }
+                heredoc_bodies.push_back(body);
+            }
+            pending_heredocs.clear();
+            continue;
+        }
+        if (std::isspace(static_cast<unsigned char>(c))) { flush_token(); ++i; continue; }
+        if (c == '#' && !have_token) {  // comment to end of line
+            while (i < source.size() && source[i] != '\n') ++i;
+            continue;
+        }
+        if (c == '\\') {
+            if (i + 1 < source.size()) {
+                if (source[i + 1] == '\n') { i += 2; continue; }  // line continuation
+                token += source[i + 1];
+                have_token = true;
+                i += 2;
+                continue;
+            }
+            ++i;
+            continue;
+        }
+        if (c == '\'' || c == '"') {
+            const char quote = c;
+            ++i;
+            have_token = true;
+            token_quoted = true;
+            while (i < source.size() && source[i] != quote) {
+                if (quote == '"' && source[i] == '\\' && i + 1 < source.size()) {
+                    token += source[i + 1];
+                    i += 2;
+                    continue;
+                }
+                token += source[i++];
+            }
+            if (i < source.size()) ++i;
+            continue;
+        }
+        // Substitutions stay opaque: their contents are a separate shell, and
+        // splitting them here would attribute inner commands to the outer one.
+        if (c == '$' && i + 1 < source.size() && source[i + 1] == '(') {
+            int depth = 0;
+            const std::size_t start = i;
+            while (i < source.size()) {
+                if (source[i] == '(') ++depth;
+                else if (source[i] == ')' && --depth == 0) { ++i; break; }
+                ++i;
+            }
+            token += source.substr(start, i - start);
+            have_token = true;
+            token_quoted = true;
+            continue;
+        }
+        if (c == '`') {
+            const std::size_t start = i++;
+            while (i < source.size() && source[i] != '`') ++i;
+            if (i < source.size()) ++i;
+            token += source.substr(start, i - start);
+            have_token = true;
+            token_quoted = true;
+            continue;
+        }
+
+        std::string found;
+        if (!token_quoted && shell_operator_at(source, i, found)) {
+            // `<<` introduces a heredoc; the delimiter is the next token.
+            if (found == "<" && source.compare(i, 2, "<<") == 0) {
+                std::size_t end = i + 2;
+                if (end < source.size() && source[end] == '-') ++end;
+                while (end < source.size() && std::isspace(static_cast<unsigned char>(source[end])) &&
+                       source[end] != '\n')
+                    ++end;
+                std::size_t name_end = end;
+                while (name_end < source.size() &&
+                       !std::isspace(static_cast<unsigned char>(source[name_end])) &&
+                       source[name_end] != ';' && source[name_end] != '|')
+                    ++name_end;
+                bool strip = false;
+                const std::string introducer =
+                    source.substr(i, 2) + (source[i + 2] == '-' ? "-" : "") +
+                    source.substr(end, name_end - end);
+                const std::string terminator = heredoc_terminator(introducer, strip);
+                if (!terminator.empty()) pending_heredocs.emplace_back(terminator, strip);
+                current.redirections.push_back(
+                    ok_result({symbol_field("operator", "heredoc"), field("target", terminator)}));
+                i = name_end;
+                continue;
+            }
+            flush_token();
+            if (found == "|" || found == "&&" || found == "||" || found == ";" || found == "&") {
+                flush_command(found);
+            } else {
+                pending_redirection = found;
+            }
+            i += found.size();
+            continue;
+        }
+        token += c;
+        have_token = true;
+        ++i;
+    }
+    flush_command("");
+    return commands;
+}
+
+void register_shell_parsing(Interpreter& interpreter) {
+    interpreter.define_native("shell-parse", [](Interpreter&, const std::vector<Value>& a) {
+        arity_between(a, 1, 2, "shell-parse");
+        const std::string source(want_string(a[0], "shell-parse"));
+        std::vector<std::string> heredocs;
+        const std::vector<ShellCommand> commands = shell_split(source, heredocs);
+
+        std::vector<Value> records, programs;
+        std::set<std::string> seen;
+        for (const ShellCommand& command : commands) {
+            std::vector<Value> arguments, flags, assignments;
+            for (const std::string& argument : command.arguments) {
+                arguments.push_back(Value::string(argument));
+                if (argument.size() > 1 && argument[0] == '-') flags.push_back(Value::string(argument));
+            }
+            for (const auto& assignment : command.assignments)
+                assignments.push_back(Value::list({Value::string(assignment.first),
+                                                   Value::string(assignment.second)}));
+            // The basename is what identifies the tool: ./a/b/grep is still grep.
+            std::string base = command.program;
+            const std::size_t slash = base.find_last_of('/');
+            if (slash != std::string::npos) base = base.substr(slash + 1);
+            if (!base.empty() && seen.insert(base).second) programs.push_back(Value::string(base));
+
+            ListBuilder record(7);
+            record.field("program", command.program);
+            record.field("name", base);
+            record.field("arguments", Value::list(std::move(arguments)));
+            record.field("flags", Value::list(std::move(flags)));
+            if (!assignments.empty()) record.field("assignments", Value::list(std::move(assignments)));
+            if (!command.redirections.empty())
+                record.field("redirections", Value::list(command.redirections));
+            if (!command.connector.empty()) record.field("connector", command.connector);
+            records.push_back(record.build());
+        }
+        std::vector<Value> bodies;
+        for (const std::string& body : heredocs) bodies.push_back(Value::string(body));
+
+        const std::int64_t count = static_cast<std::int64_t>(records.size());
+        ListBuilder out(4);
+        out.field("commands", Value::list(std::move(records)));
+        out.field("count", count);
+        out.field("programs", Value::list(std::move(programs)));
+        out.field("heredocs", Value::list(std::move(bodies)));
+        return out.build();
+    });
+
+    // Telemetry: which tools a session actually spent its budget on.
+    interpreter.define_native("telemetry", [](Interpreter& vm, const std::vector<Value>& a) {
+        arity_between(a, 0, 1, "telemetry");
+        if (!a.empty()) {
+            const std::string action = symbol_name(a[0], "telemetry");
+            if (action == "start") { vm.set_telemetry(true); }
+            else if (action == "stop") { vm.set_telemetry(false); }
+            else if (action == "clear") { vm.clear_telemetry(); }
+            else if (action != "summary")
+                return error_result("unknown telemetry action: " + action, "invalid-argument",
+                                    "telemetry");
+        }
+        return vm.telemetry_summary();
+    });
+
+    // A published tool is an ordinary Scheme procedure plus the metadata an agent
+    // needs to discover and call it, and the provenance that says why it exists.
+    interpreter.define_native("define-tool", [](Interpreter& vm, const std::vector<Value>& a) {
+        arity(a, 1, "define-tool");
+        const Value name = option(a[0], "name");
+        const Value procedure = option(a[0], "procedure");
+        if (name.type() != Value::Type::String)
+            return error_result("a tool needs a name", "invalid-argument", "define-tool");
+        if (procedure.type() != Value::Type::Procedure)
+            return error_result("a tool needs a procedure", "invalid-argument", "define-tool");
+        vm.publish_tool(name.as_string(), a[0]);
+        return ok_result({field("name", name), field("published", true)});
+    });
+    interpreter.define_native("tool-manifest", [](Interpreter& vm, const std::vector<Value>& a) {
+        arity(a, 0, "tool-manifest");
+        return vm.tool_manifest();
+    });
+    interpreter.define_native("tool-invoke", [](Interpreter& vm, const std::vector<Value>& a) {
+        arity_between(a, 1, 2, "tool-invoke");
+        const Value definition = vm.tool_definition(want_string(a[0], "tool-invoke"));
+        if (!definition.is_list() || definition.is_nil())
+            return error_result("no such tool: " + std::string(want_string(a[0], "tool-invoke")),
+                                "not-found", "tool-invoke");
+        const Value procedure = option(definition, "procedure");
+        if (procedure.type() != Value::Type::Procedure)
+            return error_result("tool has no procedure", "invalid-argument", "tool-invoke");
+        return vm.apply(procedure, {a.size() == 2 ? a[1] : Value::nil()});
+    });
+
+    // What the host can actually do, so a generated tool can branch on it rather
+    // than guessing from the platform name.
+    interpreter.define_native("platform-facts", [](Interpreter&, const std::vector<Value>& a) {
+        arity(a, 0, "platform-facts");
+        ListBuilder out(8);
+        out.symbol_field("platform", host_platform());
+        out.field("path-separator", "/");
+        out.field("case-sensitive-paths",
+#if defined(__APPLE__)
+                  false
+#else
+                  true
+#endif
+        );
+        out.field("pointer-bits", static_cast<std::int64_t>(sizeof(void*) * 8));
+        bool wsl = false;
+        std::string kernel;
+#if defined(__linux__)
+        // WSL identifies itself in the kernel release string; a tool that shells
+        // out needs to know it is crossing a Windows boundary.
+        if (std::FILE* version = std::fopen("/proc/version", "rb")) {
+            char buffer[512];
+            const std::size_t got = std::fread(buffer, 1, sizeof buffer - 1, version);
+            std::fclose(version);
+            buffer[got] = '\0';
+            kernel = buffer;
+            std::string lowered = kernel;
+            for (char& c : lowered) c = static_cast<char>(std::tolower(
+                static_cast<unsigned char>(c)));
+            wsl = lowered.find("microsoft") != std::string::npos;
+        }
+#endif
+        out.field("wsl", wsl);
+        if (!kernel.empty()) {
+            while (!kernel.empty() && (kernel.back() == '\n' || kernel.back() == '\r'))
+                kernel.pop_back();
+            out.field("kernel", kernel);
+        }
+        return out.build();
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Version control
 // ---------------------------------------------------------------------------
 //
@@ -6012,7 +6491,7 @@ void register_vcs(Interpreter& interpreter) {
 
 void register_group(Interpreter& interpreter, PrimitiveGroup group) {
     switch (group) {
-    case PrimitiveGroup::Core: register_core(interpreter); return;
+    case PrimitiveGroup::Core: register_core(interpreter); register_shell_parsing(interpreter); return;
     case PrimitiveGroup::Text: register_text(interpreter); return;
     case PrimitiveGroup::Diff: register_diff(interpreter); return;
     case PrimitiveGroup::Json: register_json(interpreter); return;

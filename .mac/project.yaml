@@ -10,8 +10,9 @@ toolchain:
     - c++
     - git
 bootstrap:
-  command: make toolscheme_test
+  command: make all
   creates:
+    - toolscheme
     - toolscheme_test
 test:
   command: ./toolscheme_test

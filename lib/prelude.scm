@@ -1,0 +1,81 @@
+;;; prelude.scm -- shared helpers for the toolscheme library.
+;;;
+;;; Everything here is ordinary Scheme over the primitive surface. It is loaded
+;;; first, so the rest of the library can assume it.
+
+(define (any? predicate items)
+  (cond ((null? items) #f)
+        ((predicate (car items)) #t)
+        (else (any? predicate (cdr items)))))
+
+(define (count-if predicate items)
+  (fold-left (lambda (n item) (if (predicate item) (+ n 1) n)) 0 items))
+
+(define (take items n)
+  (if (or (= n 0) (null? items))
+      '()
+      (cons (car items) (take (cdr items) (- n 1)))))
+
+(define (flatten lists)
+  (fold-right append '() lists))
+
+;; Counting by scanning an association list per item is quadratic, and the corpus
+;; has thousands of distinct keys -- that alone took minutes. Sorting once and
+;; walking the runs is O(n log n) and keeps counting a pure fold.
+(define (group-runs sorted)
+  (if (null? sorted)
+      '()
+      (let loop ((rest (cdr sorted)) (key (car (car sorted))) (sum (cadr (car sorted))) (out '()))
+        (cond ((null? rest) (reverse (cons (list key sum) out)))
+              ((equal? (car (car rest)) key)
+               (loop (cdr rest) key (+ sum (cadr (car rest))) out))
+              (else (loop (cdr rest) (car (car rest)) (cadr (car rest))
+                          (cons (list key sum) out)))))))
+
+(define (tally-pairs pairs)
+  (group-runs (list-sort pairs (lambda (a b) (string<? (car a) (car b))))))
+
+(define (tally items)
+  (tally-pairs (map (lambda (key) (list key 1)) items)))
+
+(define (tally-by items amount-of)
+  (tally-pairs (map (lambda (item) (list (car item) (amount-of item))) items)))
+
+;; Ranked descending by count, which is how every report here reads.
+(define (ranked table)
+  (list-sort table (lambda (a b) (> (cadr a) (cadr b)))))
+
+(define (top table n)
+  (take (ranked table) n))
+
+(define (rows->records table key-name count-name)
+  (map (lambda (row) (list (list key-name (car row)) (list count-name (cadr row))))
+       table))
+
+;; Reads every published tool in a directory. A tool is an ordinary Scheme file
+;; that ends in a `define-tool` call, so publishing is writing a file.
+(define (load-published-tools directory)
+  (let ((listing (glob "*.scm" (list (list 'directory directory)))))
+    (if (error? listing)
+        (list (list 'loaded 0))
+        (let ((paths (map (lambda (entry) (field-ref entry 'path))
+                          (field-ref listing 'entries))))
+          (for-each
+            (lambda (path)
+              ;; `glob` reports paths relative to the capability root, not to the
+              ;; directory searched, so the entry path is already usable.
+              (let ((source (read-file path)))
+                (if (not (error? source))
+                    (catch-errors (lambda () (eval (read-from-string
+                                                     (string-append "(begin "
+                                                                    (field-ref source 'text)
+                                                                    ")")))))
+                    #f)))
+            paths)
+          (list (list 'loaded (length paths)))))))
+
+;; `field-ref` reports a missing field as #f, not as unspecified -- testing for
+;; unspecified is a silent no-op that routes every record down the wrong branch.
+;; JSON `false` and a missing field are indistinguishable here, which is fine for
+;; the fields these callers ask about and worth knowing before adding more.
+(define (absent? value) (or (unspecified? value) (eq? value #f)))

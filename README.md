@@ -5,15 +5,55 @@ favors native byte strings and immutable random-access array lists over standard
 certification, and every tool result is structured, canonical, evaluable data
 rather than text to be scraped.
 
+Its purpose is to close a loop: watch what an agent actually calls, measure what it
+costs, write a better tool, prove it by replay, and publish it back over MCP. See
+`docs/roadmap/self-improvement.md`.
+
 ## Build And Test
 
 ```sh
-make test        # 1597 checks, warning-clean at -O3
+make test        # 1650 checks, warning-clean at -O3
 make sanitize    # the same suite under AddressSanitizer + UndefinedBehaviorSanitizer
 make fuzz        # deterministic property fuzzer (seeded; reproduces from its seed)
 make bench       # benchmarks with enforced performance targets
+make loop        # log intake, tool library, MCP, synthesis, and the publication gate
 make check       # all of the above
 ```
+
+## The binary
+
+```sh
+toolscheme -e '(+ 20 22)'          # evaluate and print
+toolscheme script.scm [args]       # run a script; its value is its output
+toolscheme repl                    # interactive
+toolscheme mcp                     # stdio MCP server
+toolscheme analyze <transcript-dir>  # rank tool-use opportunities from agent logs
+```
+
+`--root` sets the sandbox; `--allow-process` and `--allow-program` open specific
+child processes; `--telemetry` records every capability call. Nothing reaches the
+host that the policy did not permit.
+
+## The loop
+
+```sh
+toolscheme analyze ~/.claude/transcripts        # what is worth replacing, and why
+make loop                                       # prove a candidate before publishing
+ANTHROPIC_API_KEY=... make synthesize           # let a model write the next one
+```
+
+Analysis of 158 transcripts — 14,129 events, 7,097 tool calls — runs in about three
+seconds and reports hot tools, shell-AST command shapes, repeat rate, output cost,
+and consecutive-call pairs as fusion candidates.
+
+A candidate is published only if it agrees with the tool it replaces on every
+replayed case *and* wins on bytes, latency, or stability. A deliberately lossy
+candidate that is both stabler and cheaper is refused, with the disagreeing line as
+evidence — winning on cost never substitutes for agreeing on the answer.
+
+Published tools live in `lib/tools/*.scm` with a provenance header naming the
+pattern that motivated them and what the replay measured. Publishing is writing a
+file; reverting is deleting one.
 
 ## Embedding
 
@@ -93,5 +133,7 @@ what keeps an agent's prompt cache warm.
 
 Identifiers a caller must act on, such as a job's `pid`, are never stripped.
 
-See `docs/roadmap/active-work.md` for the full contract and
-`tests/roadmap-test-map.md` for the coverage map.
+`docs/api.md` is the full contract: result shape, output options, capability
+policy, and the stability rule. `docs/roadmap/active-work.md` tracks the tool
+surface, `docs/roadmap/self-improvement.md` the loop, and
+`tests/roadmap-test-map.md` maps every roadmap item to its test.

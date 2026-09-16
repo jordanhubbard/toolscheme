@@ -1262,6 +1262,125 @@ static void milestone_0_git(Interpreter& vm) {
 }
 
 // ---------------------------------------------------------------------------
+// Milestone 1: observation surface
+// ---------------------------------------------------------------------------
+
+static void milestone_1_shell_parse(Interpreter& vm) {
+    // The case that broke the regex approach: a heredoc body is data, not commands.
+    // Parsing it as shell reported `e`, `if`, and `out.field` as top programs.
+    const Value parsed = vm.eval(
+        "(shell-parse \"python3 <<'EOF'\\nif x:\\n    grep = 1\\nEOF\")");
+    equal(vm, "(field-ref (shell-parse \"python3 <<'EOF'\\nif x:\\n    grep = 1\\nEOF\")"
+              " 'programs)",
+          "(\"python3\")", "m1 heredoc bodies are not commands");
+    check(toolscheme::option(parsed, "heredocs").list_size() == 1,
+          "m1 the heredoc body is captured separately");
+
+    // Quoting hides operators and command words from the tokenizer.
+    equal(vm, "(field-ref (shell-parse \"echo 'a | b; c'\") 'programs)", "(\"echo\")",
+          "m1 quoted operators are literal text");
+    equal(vm, "(field-ref (shell-parse \"grep -rn x src | head -20\") 'programs)",
+          "(\"grep\" \"head\")", "m1 pipelines split into commands");
+    equal(vm, "(field-ref (shell-parse \"a && b || c; d\") 'count)", "4",
+          "m1 every connector separates commands");
+
+    // A tool is identified by its basename, and flags are reported separately.
+    equal(vm, "(field-ref (car (field-ref (shell-parse \"/usr/bin/grep -n x\") 'commands)) 'name)",
+          "\"grep\"", "m1 a path-qualified program keeps its tool identity");
+    equal(vm, "(field-ref (car (field-ref (shell-parse \"grep -n -i x\") 'commands)) 'flags)",
+          "(\"-n\" \"-i\")", "m1 flags are extracted");
+    // Leading assignments are environment, not the program.
+    equal(vm, "(field-ref (shell-parse \"FOO=1 make -j4\") 'programs)", "(\"make\")",
+          "m1 leading assignments are not programs");
+    // Shell keywords appear in command position but nobody invoked them.
+    equal(vm, "(field-ref (shell-parse \"for f in a b; do echo $f; done\") 'programs)",
+          "(\"echo\")", "m1 shell keywords are not programs");
+    // Redirections are structure, not arguments.
+    check(toolscheme::option(vm.eval("(shell-parse \"ls > out.txt\")"), "commands")
+              .list_at(0).list_size() >= 4,
+          "m1 redirections are reported");
+    raises(vm, "(shell-parse 42)", "expects a string", "m1 shell-parse needs a string");
+}
+
+static void milestone_1_platform_facts(Interpreter& vm) {
+    // A generated tool branches on what the host can do, not on a platform name.
+    const Value facts = vm.eval("(platform-facts)");
+    check(toolscheme::option(facts, "platform").type() == Value::Type::Symbol,
+          "m1 platform-facts names the platform");
+    check(toolscheme::option(facts, "pointer-bits").as_integer() ==
+              static_cast<std::int64_t>(sizeof(void*) * 8),
+          "m1 platform-facts reports the host word size");
+    check(toolscheme::option(facts, "wsl").type() == Value::Type::Boolean,
+          "m1 platform-facts answers the WSL question explicitly");
+    check(vm.write(facts) == vm.write(vm.eval("(platform-facts)")),
+          "m1 platform facts are stable");
+}
+
+static void milestone_1_telemetry(Interpreter& vm) {
+    // Recording happens at the single point every capability call passes through,
+    // so a tool cannot be used without being counted.
+    vm.eval("(telemetry 'stop)");
+    vm.eval("(telemetry 'clear)");
+    check(toolscheme::option(vm.eval("(telemetry 'summary)"), "enabled").as_boolean() == false,
+          "m1 telemetry is off by default");
+    vm.eval("(stat \"a.txt\")");
+    check(toolscheme::option(vm.eval("(telemetry 'summary)"), "recorded").as_integer() == 0,
+          "m1 nothing is recorded while telemetry is off");
+
+    vm.eval("(telemetry 'start)");
+    vm.eval("(stat \"a.txt\")");
+    vm.eval("(stat \"a.txt\")");
+    vm.eval("(stat \"no-such-file\")");
+    const Value summary = vm.eval("(telemetry 'summary)");
+    check(toolscheme::option(summary, "recorded").as_integer() == 3,
+          "m1 every capability call is recorded");
+    const Value tools = toolscheme::option(summary, "tools");
+    bool found = false;
+    for (std::size_t i = 0; i < tools.list_size(); ++i) {
+        const Value row = tools.list_at(i);
+        if (toolscheme::option(row, "tool").as_string() != "stat") continue;
+        found = true;
+        check(toolscheme::option(row, "calls").as_integer() == 3, "m1 calls are tallied per tool");
+        check(toolscheme::option(row, "errors").as_integer() == 1,
+              "m1 a structured failure counts as an error, not a missing call");
+        check(toolscheme::option(row, "bytes").as_integer() > 0, "m1 result bytes are measured");
+    }
+    check(found, "m1 the summary names the tool that was called");
+    vm.eval("(telemetry 'stop)");
+    vm.eval("(telemetry 'clear)");
+    check(toolscheme::option(vm.eval("(telemetry 'summary)"), "recorded").as_integer() == 0,
+          "m1 clearing discards the history");
+    error_code(vm, "(telemetry 'nonsense)", "invalid-argument",
+               "m1 telemetry rejects unknown actions");
+}
+
+static void milestone_1_published_tools(Interpreter& vm) {
+    vm.eval("(define-tool (list (list 'name \"m1-double\")"
+            "                   (list 'description \"doubles a number\")"
+            "                   (list 'parameters '((n integer)))"
+            "                   (list 'provenance '((pattern \"expr * 2\") (calls 12)))"
+            "                   (list 'procedure (lambda (n) (list (list 'doubled (* 2 n)))))))");
+    equal(vm, "(tool-invoke \"m1-double\" 21)", "((doubled 42))", "m1 a published tool is callable");
+
+    // The manifest describes what an agent may call. A procedure has no written
+    // form, so publishing must not put one in the manifest.
+    const std::string manifest = vm.write(vm.eval("(tool-manifest)"));
+    check(manifest.find("m1-double") != std::string::npos, "m1 the manifest lists the tool");
+    check(manifest.find("#<") == std::string::npos,
+          "m1 the manifest carries no unreadable procedure");
+    check(vm.write(vm.read(manifest)) == manifest, "m1 the manifest round trips");
+    check(manifest.find("(pattern \"expr * 2\")") != std::string::npos,
+          "m1 provenance travels with the tool");
+
+    error_code(vm, "(tool-invoke \"no-such-tool\")", "not-found",
+               "m1 invoking an unknown tool is a structured error");
+    error_code(vm, "(define-tool '((name \"no-body\")))", "invalid-argument",
+               "m1 a tool without a procedure is refused");
+    error_code(vm, "(define-tool (list (list 'procedure (lambda (x) x))))", "invalid-argument",
+               "m1 a tool without a name is refused");
+}
+
+// ---------------------------------------------------------------------------
 // Registry completeness (roadmap item 27)
 // ---------------------------------------------------------------------------
 
@@ -1379,6 +1498,10 @@ int main() {
     milestone_0_sed(vm);
     milestone_0_stability(vm);
     milestone_0_git(vm);
+    milestone_1_shell_parse(vm);
+    milestone_1_platform_facts(vm);
+    milestone_1_telemetry(vm);
+    milestone_1_published_tools(vm);
     registry_completeness(vm);
 
     remove_fixture();

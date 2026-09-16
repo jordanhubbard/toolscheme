@@ -438,3 +438,23 @@ Performance targets:
 ## Delivery Order
 
 Work proceeds in planned-item order unless an item explicitly becomes independently executable. Foundational representation, ownership, and capability work must land before broad primitive implementation. New primitives must use bulk list construction and must not reintroduce direct host access or embedded large-language behavior.
+
+## Milestone 0 — measured baseline
+
+Grounded in 158 real transcripts rather than guesswork; see
+`docs/roadmap/self-improvement.md` for the measurements.
+
+- m0.1 Dual-mode text tools: every text tool accepts inline data or a tagged source naming files.
+- m0.2 Fill the measured gaps: `cd`, `find` predicates, `sed` as a typed line editor.
+- m0.3 Typed front ends for `git` and `http-request` over the process capability.
+- m0.4 Output-stability contract enforced centrally, with a test that identical calls are byte-identical.
+
+## Milestone 1 — the loop, end to end
+
+- m1.1 `toolscheme` binary: `-e`, script execution, `repl`, `mcp`, `analyze`, policy flags.
+- m1.2 Telemetry at `dispatch_capability()`, `shell-parse` tokenizer, `platform-facts` probe.
+- m1.3 Log intake for both transcript schemas, from a path or pasted text.
+- m1.4 Analysis: hot tools, shell-AST command shapes, repeats, output cost, fusion candidates, ranked by recoverable waste.
+- m1.5 Synthesis over the HTTP capability with structured output and a cache breakpoint. **The live call is unverified: no API key in the development environment.**
+- m1.6 Differential replay gate: equivalence by rendering, cost charged for follow-up reads, publication only when equivalent *and* winning.
+- m1.7 Publication: `define-tool`, `tool-manifest`, provenance headers, MCP export.

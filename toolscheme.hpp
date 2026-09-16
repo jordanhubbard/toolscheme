@@ -280,6 +280,21 @@ public:
     std::shared_ptr<void> handle_token(const Value& handle, std::string_view kind) const;
     Capability* handle_owner(const Value& handle) const;
 
+    // Per-call telemetry, off by default. Recording happens at the single point
+    // every capability call passes through, so it cannot miss one.
+    void set_telemetry(bool enabled);
+    bool telemetry_enabled() const noexcept;
+    void record_call(std::string_view name, std::int64_t nanoseconds, std::size_t result_bytes,
+                     std::string_view code);
+    Value telemetry_summary() const;
+    void clear_telemetry();
+
+    // Published tools: Scheme procedures with a typed signature and provenance,
+    // discoverable by an agent over MCP.
+    void publish_tool(std::string_view name, Value definition);
+    Value tool_manifest() const;
+    Value tool_definition(std::string_view name) const;
+
     // Breaks reference cycles among unreachable environments and closures. Returns
     // the number of environments reclaimed.
     std::size_t collect();
