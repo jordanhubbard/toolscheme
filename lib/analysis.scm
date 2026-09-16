@@ -7,9 +7,10 @@
 ;;; Commands are normalized by *shape*, not by literal text, because
 ;;; `grep -n needle src/a.c` and `grep -n other src/b.c` are the same opportunity.
 
-(define (bash-command input)
-  (let ((command (field-ref input "command")))
-    (if (string? command) command "")))
+;; Every agent runs shells through a differently named tool -- Bash, exec,
+;; local_shell -- and Codex wraps the command in JavaScript besides. What makes a
+;; call a shell call is that a command can be read out of it, not what it is named.
+(define (bash-command input) (hook-command-of input))
 
 ;; A command's shape is its program plus its sorted flags: the invariant part
 ;; that identifies the pattern, with paths and patterns stripped out.
@@ -113,7 +114,8 @@
 
 (define (analyze-events events)
   (let* ((calls (tool-calls events))
-         (bash (filter (lambda (c) (string-contains? (string-downcase (field-ref c 'tool "")) "bash"))
+         (bash (filter (lambda (c) (not (string-null?
+                                          (bash-command (field-ref c 'input '())))))
                        calls))
          (commands (flatten (map (lambda (c) (command-shapes (bash-command (field-ref c 'input '()))))
                                  bash)))

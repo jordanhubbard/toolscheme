@@ -40,6 +40,7 @@ struct Options {
     bool telemetry = false;
     bool quiet = false;
     bool read_standard_input = false;
+    bool text_output = false;
 };
 
 void usage() {
@@ -60,6 +61,7 @@ void usage() {
         "  --read-only         refuse every filesystem mutation\n"
         "  --telemetry         record per-call timing and result size\n"
         "  --stdin             bind standard input to `standard-input`\n"
+        "  --text              print a string result verbatim instead of written form\n"
         "  --quiet             suppress the repl banner and a script's result\n");
 }
 
@@ -95,7 +97,8 @@ std::string locate_library(const std::string& explicit_path) {
 bool load_library(Interpreter& vm, const std::string& directory, std::string& error) {
     // Order matters: later files build on earlier ones.
     static const char* files[] = {"prelude.scm", "agentlog.scm", "analysis.scm",
-                                  "replay.scm", "synthesis.scm", "mcp.scm", "hooks.scm"};
+                                  "replay.scm", "synthesis.scm", "mcp.scm", "hooks.scm",
+                                  "redirect.scm"};
     for (const char* name : files) {
         const std::string path = directory + "/" + name;
         std::ifstream input(path, std::ios::binary);
@@ -200,6 +203,7 @@ int main(int argc, char** argv) {
         else if (argument == "--read-only") options.policy.writable = false;
         else if (argument == "--telemetry") options.telemetry = true;
         else if (argument == "--stdin") options.read_standard_input = true;
+        else if (argument == "--text") options.text_output = true;
         else if (argument == "--quiet") options.quiet = true;
         else if (argument == "-h" || argument == "--help") { usage(); return 0; }
         else if (!argument.empty() && argument[0] == '-') {
@@ -244,16 +248,29 @@ int main(int argc, char** argv) {
     const std::string library = locate_library(options.library);
     std::string library_error;
     const bool library_loaded = load_library(vm, library, library_error);
-    if (!library_loaded && (options.command == "mcp" || options.command == "analyze")) {
-        std::fprintf(stderr, "toolscheme: %s requires the Scheme library: %s\n",
-                     options.command.c_str(), library_error.c_str());
-        return 2;
+    // A library that fails to parse used to be silent for -e and for scripts, so a
+    // stray paren in one file made every procedure in the library "unbound" with
+    // no hint as to why. It is fatal where the library is required and a warning
+    // everywhere else, but it is never silent.
+    if (!library_loaded) {
+        if (options.command == "mcp" || options.command == "analyze") {
+            std::fprintf(stderr, "toolscheme: %s requires the Scheme library: %s\n",
+                         options.command.c_str(), library_error.c_str());
+            return 2;
+        }
+        std::fprintf(stderr, "toolscheme: warning: library not loaded: %s\n",
+                     library_error.c_str());
     }
 
     try {
         if (options.command == "eval") {
             const Value result = vm.eval(options.expression, "<argument>");
-            std::cout << vm.write(result) << '\n';
+            // A tool standing in for a shell command has to emit the bytes that
+            // command emitted, not a quoted and escaped Scheme string.
+            if (options.text_output && result.type() == Value::Type::String)
+                std::cout << result.as_string();
+            else
+                std::cout << vm.write(result) << '\n';
             return status_of(vm, result);
         }
         if (options.command == "run") {
@@ -267,7 +284,9 @@ int main(int argc, char** argv) {
             // Primitives are pure -- `echo` and `printf` return records rather than
             // writing -- so a script's value is how it reports. Printing it is the
             // only way a script can say anything; `--quiet` is for when it should not.
-            if (!options.quiet && result.type() != Value::Type::Unspecified)
+            if (options.text_output && result.type() == Value::Type::String)
+                std::cout << result.as_string();
+            else if (!options.quiet && result.type() != Value::Type::Unspecified)
                 std::cout << vm.write(result) << '\n';
             if (result.type() == Value::Type::Pair) return status_of(vm, result);
             return 0;

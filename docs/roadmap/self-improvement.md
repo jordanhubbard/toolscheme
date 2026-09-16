@@ -25,8 +25,9 @@ Claude Code / Codex transcripts ─┐
 
 | Stage | Where | State |
 |---|---|---|
-| Intake | `lib/agentlog.scm` | Three schemas -- two transcript formats and toolscheme's own hook -- from a path or pasted text |
-| Live observation | `lib/hooks.scm`, `hooks/observe.sh` | `PreToolUse`/`PostToolUse` records every call with its directory, call id and timing; ~2.5 ms per event |
+| Intake | `lib/agentlog.scm` | Four schemas -- two Claude transcript formats, Codex rollouts, and toolscheme's own hook -- from a path or pasted text |
+| Live observation | `lib/hooks.scm`, `hooks/observe.sh` | `PreToolUse`/`PostToolUse` on Claude Code and Codex alike; ~2.5 ms per event |
+| Rewriting | `lib/redirect.scm` | Verified on both agents; off by default, and claims nothing today because nothing has earned a claim |
 | Analysis | `lib/analysis.scm` | 158 transcripts / 14,129 events in ~3s |
 | Synthesis | `lib/synthesis.scm` | Live against the NVIDIA inference gateway; prompt caching confirmed (`cache_read_input_tokens` 2084 on a repeat) |
 | Gate | `lib/replay.scm` | Proven in both directions by `make loop` |
@@ -163,19 +164,56 @@ denial, no rewriting, no output, and exit 0 whatever happened. A record is clipp
 to stay under `PIPE_BUF`, because tool calls arrive in parallel batches and two
 `O_APPEND` writes larger than that interleave and corrupt each other.
 
-Redirection is the obvious next step and is deliberately not taken yet. A
-`PreToolUse` hook can return `updatedInput`, which replaces the tool input before
-execution -- so a shell command can be rewritten into a toolscheme call with no
-round trip and nothing for the model to learn. The rule that would make it safe is
-already available: **rewrite only a command shape for which a published tool passed
-the replay gate on that shape**. Without it, we would be silently changing what the
-agent sees, which is exactly the failure the `grep_numbered` run showed is easy to
-miss.
+## Rewriting a call, and why nothing is rewritten yet
 
-The measured prize for that is large. From `make bench` on this machine, a process
-launch costs 1.89 ms while an in-process glob over 200 files costs 4.6 µs per
-operation; `grep -rn X | head -20` is two launches. Not spawning the shell is worth
-roughly three orders of magnitude, and needs no cache to collect.
+A `PreToolUse` hook may return `updatedInput`, replacing the tool input before it
+runs, so a shell command becomes a toolscheme call with no round trip and nothing
+for the model to learn. Verified working on both Claude Code and Codex 0.154.0:
+the rewrite is accepted, executed, and its output matches the original exactly.
+
+One rule governs it: **a command shape is rewritten only if a published tool claims
+that shape and carries evidence of reproducing it exactly and faster.** The
+`grep_numbered` run is why — 4.5× smaller, 7× faster, perfectly stable, and
+returning nothing at all. A rewrite to that would have been invisible.
+
+Today it rewrites nothing, and that is the honest result rather than a gap.
+
+I expected a large win here, from `make bench`: a process launch costs 1.89 ms
+against 4.6 µs for an in-process glob over 200 files, and `grep -rn X | head -20`
+is two launches. Measured end to end, the substitution is **slower** — 27 ms
+against grep's 11 ms over the same cases. A fresh interpreter start costs more than
+the extra process the fusion saves, and GNU grep out-scans the interpreter by
+roughly ten to one on large files. There is no crossover; it gets worse as files
+grow.
+
+The first version of that measurement said the opposite — a 5× *speedup* — because
+it timed `tool-render` inside the already-warm test interpreter against a
+subprocess `grep`. The redirect spawns a fresh interpreter, so the only faithful
+measurement runs the rewritten command the same way the agent would.
+
+The general shape of the finding matters more than this one tool. **Reproducing a
+command byte for byte leaves speed as the only axis to win on**, because identical
+output cannot be cheaper output. Substituting a single shell command is therefore
+only worth it when our implementation is genuinely faster, and against a mature C
+tool on its own ground it usually will not be.
+
+Where the win actually lives is where the interaction changes shape: fusing calls
+that currently cost separate round trips. `read -> read` (1203) and `grep -> read`
+(192) are the largest measured pairs, and a fused tool is not byte-identical to
+anything, so it cannot be a transparent rewrite of one command — it needs the hook
+to compare a fused call against the recorded sequence, which is the next mechanism
+rather than this one.
+
+Three fidelity details showed up on the way, each invisible until compared byte
+for byte: grep prints no path prefix when given a single file, terminates its last
+line, and a pipeline exits with its *last* command's status — so `grep x f` exits 1
+on no match while `grep x f | head -20` exits 0.
+
+A fourth showed up in the Codex reader. Its tool inputs use JavaScript object
+literals with bare keys, so matching only `cmd:` and not `"cmd":` silently dropped
+a fifth of the shell calls and a third of the `sed -n` invocations — an undercount
+that reads as a finding rather than as a bug. Both spellings occur in the same
+corpus.
 
 ## Open
 

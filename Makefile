@@ -65,6 +65,9 @@ loop: toolscheme
 	@$(call check-scheme,tests/hook-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/tools-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/redirect-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/proven-check.scm --lib lib --allow-process \
+	  --allow-program sh --allow-program grep --allow-program head,(checks-hold #t))
 	@$(call check-scheme,tests/synthesis-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/replay-check.scm --lib lib --allow-process \
 	  --allow-program grep --allow-program head --allow-program sh --allow-program bash,(gate-holds #t))

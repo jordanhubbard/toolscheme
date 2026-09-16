@@ -34,24 +34,42 @@ toolscheme analyze <transcript-dir>  # rank tool-use opportunities from agent lo
 child processes; `--telemetry` records every capability call. Nothing reaches the
 host that the policy did not permit.
 
-## Observing an agent live
+## Attaching to an agent
 
 A `PreToolUse` / `PostToolUse` hook records every tool call as it happens: the
 command, the directory it ran in, and -- joining the two events by call id -- how
-long it took and how many bytes came back. Transcripts give none of that reliably;
-one schema records no working directory at all, and neither records timings.
+long it took and how many bytes came back. Claude Code and Codex send the same
+fields and accept the same decisions, so one script serves both. See
+`docs/agents.md` for setup; `.claude/settings.json` installs it for this project,
+and nothing is installed globally.
 
 ```sh
-toolscheme analyze .toolscheme    # analyze what this project's agent actually did
+toolscheme analyze ~/.claude/projects     # Claude Code, nested schema
+toolscheme analyze ~/.claude/transcripts  # Claude Code, flat schema
+toolscheme analyze ~/.codex/sessions      # Codex rollouts
+toolscheme analyze .toolscheme            # this project's own hook log
 ```
 
-`.claude/settings.json` installs it for this project. It **observes only**: it
-never denies a call, never rewrites one, prints nothing, and exits 0 whatever
-happens -- a hook that breaks the session it is measuring is worse than no
-measurement. It does nothing at all until `make toolscheme` has been run. Delete
-`.claude/settings.json` to turn it off.
+The hook **observes by default**: it never denies a call, prints nothing, and
+exits 0 whatever happens -- a hook that breaks the session it is measuring is
+worse than no measurement. It does nothing at all until `make toolscheme` has been
+run. Cost is about 2.5 ms per event.
 
-Cost is about 2.5 ms per event, which is less than a single `fork`+`exec`.
+### Rewriting a call
+
+A `PreToolUse` hook may also return `updatedInput`, replacing the tool input before
+it runs, so a shell command becomes a toolscheme call with nothing for the model to
+learn. Exactly one rule governs it:
+
+> A command shape is rewritten only if a published tool claims that shape **and**
+> carries replay evidence of reproducing it exactly -- same bytes, same exit
+> status -- **and** of being faster.
+
+`TOOLSCHEME_REDIRECT=1` switches it on. Today it rewrites nothing, because no tool
+has earned a claim: reproducing a command byte for byte leaves speed as the only
+axis to win on, and `search-read` standing in for `grep -n … | head -20` is
+correct and *slower* -- 27 ms against grep's 11 ms. `make loop` recomputes that
+every run and fails the build if a tool claims more than its cases establish.
 
 ## The loop
 

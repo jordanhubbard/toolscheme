@@ -111,11 +111,50 @@
                  (field-ref record "call" "")
                  (field-ref record "at" 0)))))
 
+;; Codex writes a fourth schema: one JSON object per rollout record, with tool
+;; calls as `response_item` payloads. Unlike either Claude format it carries an
+;; epoch timestamp and a call id on every record, so durations come out of a
+;; Codex transcript without needing a live hook at all.
+(define (codex-call-time payload)
+  (let ((meta (field-ref payload "internal_chat_message_metadata_passthrough" '())))
+    (let ((created (field-ref meta "create_time" 0)))
+      ;; Codex records seconds as a float; milliseconds keep the resolution that
+      ;; matters without pretending to more of it.
+      (if (number? created) (floor (* 1000 created)) 0))))
+
+(define (codex-output-bytes payload)
+  (let ((output (field-ref payload "output" '())))
+    (if (list? output)
+        (fold-left (lambda (n block) (+ n (string-length (field-ref block "text" "")))) 0 output)
+        (string-length (write-to-string output)))))
+
+(define (codex-event record)
+  (let* ((payload (field-ref record "payload" '()))
+         (kind (field-ref payload "type" ""))
+         (name (field-ref payload "name" ""))
+         (call (field-ref payload "call_id" ""))
+         (at (codex-call-time payload)))
+    (cond
+      ;; Code mode: the shell arrives wrapped in JavaScript.
+      ((string=? kind "custom_tool_call")
+       (let ((input (field-ref payload "input" "")))
+         (list (event 'tool-call name (list (list "command" (hook-command-of input)))
+                      0 0 0 (hook-workdir-of input "") call at))))
+      ((string=? kind "function_call")
+       (let* ((raw (field-ref payload "arguments" ""))
+              (parsed (if (string? raw) (json-parse raw) #f))
+              (arguments (if (or (not parsed) (error? parsed)) '() (field-ref parsed 'value))))
+         (list (event 'tool-call name arguments 0 0 0 "" call at))))
+      ((or (string=? kind "custom_tool_call_output") (string=? kind "function_call_output"))
+       (list (event 'tool-result "" '() (codex-output-bytes payload) 0 0 "" call at)))
+      (else '()))))
+
 ;; The two schemas are told apart by a field only the flat one has. Getting this
 ;; test wrong is invisible: every nested record falls through the flat parser,
 ;; which finds no tool calls in it and reports an empty corpus rather than an error.
 (define (events-of-record record)
   (cond ((equal? (field-ref record "source" #f) "toolscheme-hook") (hook-event record))
+        ((equal? (field-ref record "type" #f) "response_item") (codex-event record))
         ((absent? (field-ref record "tool_name" #f)) (nested-event record))
         (else (flat-event record))))
 
@@ -153,3 +192,111 @@
                  (map (lambda (entry) (field-ref entry 'path))
                       (field-ref listing 'entries)))))
          directories)))
+
+;; ---------------------------------------------------------------------------
+;; Reading a command out of an agent's tool input
+;; ---------------------------------------------------------------------------
+;;
+;; Claude Code hands over {"command": "..."}. Codex in code mode hands over
+;; JavaScript that calls tools.exec_command({cmd:"...", workdir:"..."}) -- and
+;; those object keys are unquoted, so it is JavaScript and not JSON, which a JSON
+;; parser rejects outright. One snippet may also contain several such calls.
+;; Both agents are invoking a shell; only the wrapping differs, so both are
+;; unwrapped here rather than in two separate adapters.
+
+;; Reads the JavaScript string literal starting at `from` (which must be the
+;; opening quote), returning (text next-index) or #f. Escapes are honoured because
+;; a command containing \" would otherwise terminate the value early and truncate
+;; whatever followed.
+(define (js-string-at text from)
+  (if (or (> from (string-length text)) (not (char=? (string-ref text from) #\")))
+      #f
+      (let loop ((i (+ from 1)) (out ""))
+        (if (> i (string-length text))
+            #f
+            (let ((c (string-ref text i)))
+              (cond ((char=? c #\") (list out (+ i 1)))
+                    ((char=? c #\\)
+                     (if (> (+ i 1) (string-length text))
+                         #f
+                         (let ((e (string-ref text (+ i 1))))
+                           (loop (+ i 2)
+                                 (string-append out
+                                                (cond ((char=? e #\n) "\n")
+                                                      ((char=? e #\t) "\t")
+                                                      ((char=? e #\r) "\r")
+                                                      (else (list->string (list e)))))))))
+                    (else (loop (+ i 1) (string-append out (list->string (list c)))))))))))
+
+;; Every value of `key` in the snippet, in order. Codex writes JavaScript object
+;; literals with bare keys (`cmd:`) while JSON quotes them (`"cmd":`), and the two
+;; appear in the same corpus, so the closing quote is skipped when present rather
+;; than being searched for as part of the key.
+(define (key-value-start text from key)
+  (let ((hit (string-index (substring text from (string-length text)) key)))
+    (if (not hit)
+        #f
+        (let* ((at (+ from hit -1))
+               (after (+ at (string-length key)))
+               (skipped (if (and (<= after (string-length text))
+                                 (char=? (string-ref text after) #\"))
+                            (+ after 1)
+                            after)))
+          (if (and (<= skipped (string-length text))
+                   (char=? (string-ref text skipped) #\:))
+              (list (+ skipped 1) (+ at 1))
+              (list #f (+ at 1)))))))
+
+(define (js-values key text)
+  (let loop ((from 1) (out '()))
+    (let ((found (key-value-start text from key)))
+      (cond ((not found) (reverse out))
+            ((not (car found)) (loop (cadr found) out))
+            (else
+              (let ((quoted (js-string-at text (car found))))
+                (if quoted
+                    (loop (cadr quoted) (cons (car quoted) out))
+                    (loop (cadr found) out))))))))
+
+(define (exec-commands text)
+  (if (string? text) (js-values "cmd" text) '()))
+
+;; Several commands in one snippet are one tool call that ran a small script, so
+;; they are joined: the shape analysis reads the union, and a rewrite has to cover
+;; all of it or cover none.
+(define (hook-command-of input)
+  (let ((direct (field-ref input "command" #f)))
+    (cond ((string? direct) direct)
+          ((string? input) (string-join (exec-commands input) "\n"))
+          (else
+            (let ((nested (field-ref input "input" #f)))
+              (if (string? nested) (string-join (exec-commands nested) "\n") ""))))))
+
+(define (hook-workdir-of input fallback)
+  (let* ((text (cond ((string? input) input)
+                     ((string? (field-ref input "input" #f)) (field-ref input "input" ""))
+                     (else #f)))
+         (found (if text (js-values "workdir" text) '())))
+    (if (null? found) fallback (car found))))
+
+;; Rebuilding an input with a different command. Only a single-command snippet is
+;; understood; anything else returns #f so the caller leaves the call alone rather
+;; than guessing at a structure it does not recognize.
+(define (hook-input-with-command input replacement)
+  (cond ((string? (field-ref input "command" #f))
+         (map (lambda (pair)
+                (if (equal? (car pair) "command") (list "command" replacement) pair))
+              input))
+        (else
+          (let* ((text (cond ((string? input) input)
+                             ((string? (field-ref input "input" #f)) (field-ref input "input" ""))
+                             (else #f)))
+                 (commands (if text (exec-commands text) '())))
+            (if (or (not text) (not (= (length commands) 1)))
+                #f
+                (let ((rebuilt (string-replace text (car commands) replacement)))
+                  (if (string? input)
+                      rebuilt
+                      (map (lambda (pair)
+                             (if (equal? (car pair) "input") (list "input" rebuilt) pair))
+                           input))))))))

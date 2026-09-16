@@ -1657,8 +1657,13 @@ Value Interpreter::tool_definition(std::string_view name) const {
 Value Interpreter::tool_manifest() const {
     std::vector<Value> rows;
     for (const auto& entry : impl_->tools) {
-        ListBuilder row(5);
-        for (const char* key : {"name", "description", "parameters", "provenance", "stability"}) {
+        ListBuilder row(11);
+        // `shapes` and `proven` are data, not procedures, and they are the whole
+        // basis on which a caller may substitute this tool for a command: what it
+        // claims to replace, and the replay evidence behind the claim.
+        for (const char* key : {"name", "description", "parameters", "provenance",
+                                "stability", "shapes", "proven", "translate",
+                                "legacy-form", "empty-status", "cases"}) {
             const Value value = option(entry.second, key);
             if (value.type() != Value::Type::Unspecified) row.field(key, value);
         }

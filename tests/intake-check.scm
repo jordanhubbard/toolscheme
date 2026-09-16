@@ -20,9 +20,27 @@
     "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[]},"
     "\"toolUseResult\":{\"stdout\":\"a\\nb\\nc\"}}\n"))
 
+;; Codex writes a fourth schema: rollout records whose tool calls wrap the shell
+;; in JavaScript, with unquoted object keys that no JSON parser will accept, and
+;; sometimes several commands in one call.
+(define codex-text
+  (string-append
+    "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\","
+    "\"name\":\"exec\",\"call_id\":\"c9\",\"input\":"
+    "\"text(await tools.exec_command({cmd:\\\"grep -n x f.c | head -20\\\","
+    "workdir:\\\"/repo\\\"}));\","
+    "\"internal_chat_message_metadata_passthrough\":{\"create_time\":1789515871.5}}}\n"
+    "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call_output\","
+    "\"call_id\":\"c9\",\"output\":[{\"type\":\"input_text\",\"text\":\"f.c:1:x\"}],"
+    "\"internal_chat_message_metadata_passthrough\":{\"create_time\":1789515871.9}}}\n"))
+
+(define codex (agent-log-events codex-text))
+(define codex-call (car (field-ref codex 'events)))
+
 (define flat (agent-log-events flat-text))
 (define nested (agent-log-events nested-text))
 (define both (analyze-events (append (field-ref flat 'events) (field-ref nested 'events))))
+(define codex-report (analyze-events (field-ref codex 'events)))
 
 ;; Same tool, spelled differently by the two schemas, must tally as one.
 (define tools (field-ref both 'tools))
@@ -45,7 +63,11 @@
         (list 'shell-parsed (= (field-ref both 'shell-calls) 2))
         (list 'cache-visible (field-ref (field-ref both 'cache) 'available))
         (list 'cache-created (field-ref (field-ref both 'cache) 'cache-created-tokens 0))
-        (list 'result-bytes-counted (> (field-ref both 'result-bytes) 0))))
+        (list 'result-bytes-counted (> (field-ref both 'result-bytes) 0))
+        (list 'codex-command (field-ref (field-ref codex-call 'input '()) "command" ""))
+        (list 'codex-workdir (field-ref codex-call 'directory ""))
+        (list 'codex-shell-calls (field-ref codex-report 'shell-calls))
+        (list 'codex-latency-ms (field-ref (field-ref codex-report 'latency) 'total-ms 0))))
 
 (list (list 'checks checks)
       (list 'checks-hold
@@ -56,4 +78,10 @@
                  (= (field-ref both 'shell-calls) 2)
                  (eq? (field-ref (field-ref both 'cache) 'available) #t)
                  (= (field-ref (field-ref both 'cache) 'cache-created-tokens 0) 250)
-                 (> (field-ref both 'result-bytes) 0))))
+                 (> (field-ref both 'result-bytes) 0)
+                 ;; Codex: JavaScript unwrapped, workdir kept, timing paired.
+                 (string=? (field-ref (field-ref codex-call 'input '()) "command" "")
+                           "grep -n x f.c | head -20")
+                 (string=? (field-ref codex-call 'directory "") "/repo")
+                 (= (field-ref codex-report 'shell-calls) 1)
+                 (> (field-ref (field-ref codex-report 'latency) 'total-ms 0) 0))))

@@ -93,15 +93,79 @@
 ;; The grep-shaped projection the replay gate compares against. Rendering is how a
 ;; structured result proves it answers the same question as the text tool.
 (define (search-read->grep result)
-  (string-join
-    (flatten (map (lambda (file)
-                    (map (lambda (m)
-                           (string-append (field-ref file 'path) ":"
-                                          (number->string (field-ref m 'line)) ":"
-                                          (field-ref m 'text "")))
-                         (field-ref file 'matches)))
-                  (field-ref result 'files)))
-    "\n"))
+  ;; grep prefixes the path only when it was given more than one file to search --
+  ;; on the number searched, not the number that matched. Getting this wrong makes
+  ;; the tool's output differ from the command's on every single-file call, which
+  ;; is most of them.
+  (let* ((prefix? (> (field-ref result 'files-scanned 0) 1))
+         (lines
+          (string-join
+      (flatten (map (lambda (file)
+                      (map (lambda (m)
+                             (string-append (if prefix?
+                                                (string-append (field-ref file 'path) ":")
+                                                "")
+                                            (number->string (field-ref m 'line)) ":"
+                                            (field-ref m 'text "")))
+                           (field-ref file 'matches)))
+                    (field-ref result 'files)))
+        "\n")))
+    ;; grep terminates its last line. A tool standing in for it has to as well:
+    ;; the replay gate compares normalized text, but a redirect hands these bytes
+    ;; straight to the agent, and there the difference is real.
+    (if (string-null? lines) "" (string-append lines "\n"))))
+
+
+;; ---------------------------------------------------------------------------
+;; Standing in for the command
+;; ---------------------------------------------------------------------------
+;;
+;; A tool may only replace a shell command if it can be *called* from that command
+;; and can render its answer in the command's own shape. Both directions are
+;; needed, and both are checked by replaying real recorded invocations.
+
+(define (non-flag-arguments command)
+  (let ((flags (field-ref command 'flags '())))
+    (filter (lambda (a) (not (member a flags))) (field-ref command 'arguments '()))))
+
+(define (named-command commands name)
+  (let loop ((rest commands))
+    (cond ((null? rest) #f)
+          ((string=? (field-ref (car rest) 'name "") name) (car rest))
+          (else (loop (cdr rest))))))
+
+;; `head -20` bounds the output; the tool takes the same bound as an argument, so
+;; the pipe disappears rather than being reproduced.
+(define (head-limit commands fallback)
+  (let ((head (named-command commands "head")))
+    (if (not head)
+        fallback
+        (let loop ((flags (field-ref head 'flags '())))
+          (cond ((null? flags) fallback)
+                ((string->number (substring (car flags) 2 (string-length (car flags))))
+                 (string->number (substring (car flags) 2 (string-length (car flags)))))
+                (else (loop (cdr flags))))))))
+
+;; A pipeline exits with the status of its *last* command, so `grep x f` exits 1
+;; when nothing matched but `grep x f | head -20` exits 0 -- head succeeded. The
+;; difference is invisible until something reads $? , which `grep -q X && ...`
+;; does and nothing else.
+(define (search-read-empty-status text)
+  (let ((commands (field-ref (shell-parse text) 'commands)))
+    (if (null? commands)
+        0
+        (let ((last-command (list-ref commands (length commands))))
+          (if (string=? (field-ref last-command 'name "") "grep") 1 0)))))
+
+(define (search-read-translate text)
+  (let* ((commands (field-ref (shell-parse text) 'commands))
+         (grep (named-command commands "grep"))
+         (words (if grep (non-flag-arguments grep) '())))
+    (list (list 'pattern (if (null? words) "" (car words)))
+          (list 'source (cons 'files (if (null? words) '() (cdr words))))
+          (list 'limit (head-limit commands 20))
+          ;; Standing in for grep means emitting grep's lines and nothing else.
+          (list 'context 0))))
 
 (define-tool
   (list (list 'name "search-read")
@@ -116,4 +180,30 @@
               "No volatile fields; regions depend only on file content, so repeats are byte-identical.")
         (list 'provenance
               '((pattern "grep -> read") (observed-pairs 192) (corpus "158 transcripts")))
+        ;; What this may stand in for, how to call it from such a command, and how
+        ;; to render its answer back in that command's shape.
+        (list 'shapes '("grep -n" "head -20"))
+        (list 'translate "search-read-translate")
+        (list 'legacy-form "search-read->grep")
+        ;; Standing in for a command means standing in for its exit status too.
+        (list 'empty-status "search-read-empty-status")
+        ;; Nothing is claimed as proven, so nothing is ever rewritten to this tool.
+        ;; It reproduces `grep -n ... | head -N` byte for byte, exit status
+        ;; included -- and it is slower: 27 ms against grep's 11 ms over the same
+        ;; cases, because a fresh interpreter start costs more than the extra
+        ;; process the fusion saves, and GNU grep out-scans the interpreter by
+        ;; roughly ten to one on large files.
+        ;;
+        ;; Reproducing a command's bytes exactly leaves time as the only axis to
+        ;; win on, and this does not win it. `make loop` recomputes that every run;
+        ;; declaring a shape here that the cases do not establish *and* improve
+        ;; fails the build.
+        (list 'proven '())
+        ;; The recorded invocations the claim rests on. `make loop` replays these
+        ;; every time rather than trusting the verdict written beside them.
+        (list 'cases
+              (list (list (list 'command "grep -n define-tool lib/prelude.scm | head -20")
+                          (list 'directory ""))
+                    (list (list 'command "grep -n tally lib/prelude.scm lib/analysis.scm | head -20")
+                          (list 'directory ""))))
         (list 'procedure search-read)))
