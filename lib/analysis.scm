@@ -77,6 +77,40 @@
                            (field-ref (cadr calls) 'tool ""))
             (adjacent-pairs (cdr calls)))))
 
+;; Only live observation can report how long a tool took: a transcript records no
+;; per-call timestamp and no way to pair a call with its result. Where the data is
+;; there, this is the most direct statement of what a tool costs -- count times
+;; duration, rather than count alone.
+(define (call-endpoints events kind field)
+  (list-sort
+    (map (lambda (e) (list (field-ref e 'call "") (field-ref e 'at 0) (field-ref e field 0)))
+         (filter (lambda (e) (and (eq? (field-ref e 'kind) kind)
+                                  (not (string-null? (field-ref e 'call "")))))
+                 events))
+    (lambda (a b) (string<? (car a) (car b)))))
+
+(define (paired-durations events)
+  (let loop ((starts (call-endpoints events 'tool-call 'tool))
+             (ends (call-endpoints events 'tool-result 'result-bytes))
+             (out '()))
+    (cond ((or (null? starts) (null? ends)) (reverse out))
+          ((string<? (car (car starts)) (car (car ends))) (loop (cdr starts) ends out))
+          ((string<? (car (car ends)) (car (car starts))) (loop starts (cdr ends) out))
+          (else (loop (cdr starts) (cdr ends)
+                      (cons (list (caddr (car starts))
+                                  (max 0 (- (cadr (car ends)) (cadr (car starts)))))
+                            out))))))
+
+(define (latency-report events)
+  (let ((paired (paired-durations events)))
+    (if (null? paired)
+        (list (list 'available #f)
+              (list 'note "no paired call timings; this source records none"))
+        (list (list 'available #t)
+              (list 'measured-calls (length paired))
+              (list 'total-ms (fold-left (lambda (n row) (+ n (cadr row))) 0 paired))
+              (list 'by-tool (rows->records (top (tally-by paired cadr) 15) 'tool 'total-ms))))))
+
 (define (analyze-events events)
   (let* ((calls (tool-calls events))
          (bash (filter (lambda (c) (string-contains? (string-downcase (field-ref c 'tool "")) "bash"))
@@ -97,6 +131,7 @@
           (list 'command-samples (shape-samples bash))
           (list 'fusion-candidates (rows->records (top (tally (adjacent-pairs calls)) 10)
                                                   'sequence 'occurrences))
+          (list 'latency (latency-report events))
           (list 'repeats (repeat-report calls))
           (list 'cache (cache-report calls)))))
 

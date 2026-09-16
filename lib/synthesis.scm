@@ -16,12 +16,6 @@
 ;; all -- which is the shape this file already builds and parses. So only the host,
 ;; the auth header and the model name differ from talking to Anthropic directly,
 ;; and both are supported rather than one replacing the other.
-(define (env-value name)
-  (let ((found (env (list (list 'name name)))))
-    (if (or (error? found) (null? (field-ref found 'variables '())))
-        #f
-        (cadr (car (field-ref found 'variables))))))
-
 (define synthesis-endpoint
   (or (env-value "TOOLSCHEME_SYNTHESIS_ENDPOINT")
       "https://inference-api.nvidia.com/v1/messages"))

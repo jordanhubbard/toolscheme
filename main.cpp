@@ -39,6 +39,7 @@ struct Options {
     toolscheme::posix::Policy policy;
     bool telemetry = false;
     bool quiet = false;
+    bool read_standard_input = false;
 };
 
 void usage() {
@@ -58,6 +59,7 @@ void usage() {
         "  --allow-program <p> add one program to the executable allowlist\n"
         "  --read-only         refuse every filesystem mutation\n"
         "  --telemetry         record per-call timing and result size\n"
+        "  --stdin             bind standard input to `standard-input`\n"
         "  --quiet             suppress the repl banner and a script's result\n");
 }
 
@@ -93,7 +95,7 @@ std::string locate_library(const std::string& explicit_path) {
 bool load_library(Interpreter& vm, const std::string& directory, std::string& error) {
     // Order matters: later files build on earlier ones.
     static const char* files[] = {"prelude.scm", "agentlog.scm", "analysis.scm",
-                                  "replay.scm", "synthesis.scm", "mcp.scm"};
+                                  "replay.scm", "synthesis.scm", "mcp.scm", "hooks.scm"};
     for (const char* name : files) {
         const std::string path = directory + "/" + name;
         std::ifstream input(path, std::ios::binary);
@@ -197,6 +199,7 @@ int main(int argc, char** argv) {
         else if (argument == "--allow-program") options.policy.allowed_programs.push_back(next());
         else if (argument == "--read-only") options.policy.writable = false;
         else if (argument == "--telemetry") options.telemetry = true;
+        else if (argument == "--stdin") options.read_standard_input = true;
         else if (argument == "--quiet") options.quiet = true;
         else if (argument == "-h" || argument == "--help") { usage(); return 0; }
         else if (!argument.empty() && argument[0] == '-') {
@@ -227,6 +230,16 @@ int main(int argc, char** argv) {
     for (const std::string& argument : options.arguments)
         script_arguments.push_back(Value::string(argument));
     vm.define("command-arguments", Value::list(std::move(script_arguments)));
+
+    // Standard input is bound as a value rather than exposed as a primitive that
+    // reads it: a script that consumes stdin should say so on the command line, and
+    // nothing else in the language should be able to reach ambient process state.
+    // Off by default, because a script that does not ask must not block on a pipe.
+    if (options.read_standard_input) {
+        std::ostringstream text;
+        text << std::cin.rdbuf();
+        vm.define("standard-input", Value::string(text.str()));
+    }
 
     const std::string library = locate_library(options.library);
     std::string library_error;

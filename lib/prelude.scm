@@ -79,3 +79,11 @@
 ;; JSON `false` and a missing field are indistinguishable here, which is fine for
 ;; the fields these callers ask about and worth knowing before adding more.
 (define (absent? value) (or (unspecified? value) (eq? value #f)))
+
+;; One environment variable, or #f. Configuration reaches a script this way rather
+;; than through ambient state the language can read on its own.
+(define (env-value name)
+  (let ((found (env (list (list 'name name)))))
+    (if (or (error? found) (null? (field-ref found 'variables '())))
+        #f
+        (cadr (car (field-ref found 'variables))))))

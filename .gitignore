@@ -5,3 +5,6 @@ toolscheme_bench
 toolscheme
 *.o
 *.dSYM/
+
+# Observations are local measurements, not source.
+.toolscheme/

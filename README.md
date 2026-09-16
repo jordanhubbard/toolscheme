@@ -34,6 +34,25 @@ toolscheme analyze <transcript-dir>  # rank tool-use opportunities from agent lo
 child processes; `--telemetry` records every capability call. Nothing reaches the
 host that the policy did not permit.
 
+## Observing an agent live
+
+A `PreToolUse` / `PostToolUse` hook records every tool call as it happens: the
+command, the directory it ran in, and -- joining the two events by call id -- how
+long it took and how many bytes came back. Transcripts give none of that reliably;
+one schema records no working directory at all, and neither records timings.
+
+```sh
+toolscheme analyze .toolscheme    # analyze what this project's agent actually did
+```
+
+`.claude/settings.json` installs it for this project. It **observes only**: it
+never denies a call, never rewrites one, prints nothing, and exits 0 whatever
+happens -- a hook that breaks the session it is measuring is worse than no
+measurement. It does nothing at all until `make toolscheme` has been run. Delete
+`.claude/settings.json` to turn it off.
+
+Cost is about 2.5 ms per event, which is less than a single `fork`+`exec`.
+
 ## The loop
 
 ```sh

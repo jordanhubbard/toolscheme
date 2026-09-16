@@ -6,7 +6,8 @@ adapts to how agents work instead of inheriting Unix's 1970s ergonomics.
 
 ```
 Claude Code / Codex transcripts ─┐
-   pasted session text ──────────┼─→ agent-log-events ─→ opportunity report
+   pasted session text ──────────┤
+   PreToolUse/PostToolUse hook ──┼─→ agent-log-events ─→ opportunity report
    toolscheme self-telemetry ────┘        (Scheme)            (Scheme)
                                                                   │
                                               synthesize ←────────┘
@@ -24,7 +25,8 @@ Claude Code / Codex transcripts ─┐
 
 | Stage | Where | State |
 |---|---|---|
-| Intake | `lib/agentlog.scm` | Both discovered transcript schemas, from a path or pasted text; tool names normalized, working directory carried |
+| Intake | `lib/agentlog.scm` | Three schemas -- two transcript formats and toolscheme's own hook -- from a path or pasted text |
+| Live observation | `lib/hooks.scm`, `hooks/observe.sh` | `PreToolUse`/`PostToolUse` records every call with its directory, call id and timing; ~2.5 ms per event |
 | Analysis | `lib/analysis.scm` | 158 transcripts / 14,129 events in ~3s |
 | Synthesis | `lib/synthesis.scm` | Live against the NVIDIA inference gateway; prompt caching confirmed (`cache_read_input_tokens` 2084 on a repeat) |
 | Gate | `lib/replay.scm` | Proven in both directions by `make loop` |
@@ -137,6 +139,43 @@ empty is exactly the failure a cost metric cannot see.
   matching the safe shape `head -c` turned out to be
   `cd /home/jkh && time ./toolscheme analyze ... | head -c 3000` — *every* command
   in the line must be safe, not just the one the shape came from.
+
+## Watching instead of reading
+
+A transcript is what was written down afterwards. A hook sees the call happen, and
+that difference decides what can be measured:
+
+| | flat transcript | nested transcript | hook |
+|---|---|---|---|
+| tool and arguments | yes | yes | yes |
+| token usage / cache churn | no | yes | no |
+| working directory | no | yes | yes |
+| call id joining call to result | no | no | yes |
+| duration | no | no | **yes** |
+
+Duration is the one that matters most, because a tool's cost is count times
+duration, not count. It needs a per-call timestamp *and* a way to pair a call with
+its result, and no transcript format has both.
+
+The hook is deliberately the least clever component in the project. It runs inside
+someone else's session on every tool call, so it observes and nothing more: no
+denial, no rewriting, no output, and exit 0 whatever happened. A record is clipped
+to stay under `PIPE_BUF`, because tool calls arrive in parallel batches and two
+`O_APPEND` writes larger than that interleave and corrupt each other.
+
+Redirection is the obvious next step and is deliberately not taken yet. A
+`PreToolUse` hook can return `updatedInput`, which replaces the tool input before
+execution -- so a shell command can be rewritten into a toolscheme call with no
+round trip and nothing for the model to learn. The rule that would make it safe is
+already available: **rewrite only a command shape for which a published tool passed
+the replay gate on that shape**. Without it, we would be silently changing what the
+agent sees, which is exactly the failure the `grep_numbered` run showed is easy to
+miss.
+
+The measured prize for that is large. From `make bench` on this machine, a process
+launch costs 1.89 ms while an in-process glob over 200 files costs 4.6 µs per
+operation; `grep -rn X | head -20` is two launches. Not spawning the shell is worth
+roughly three orders of magnitude, and needs no cache to collect.
 
 ## Open
 

@@ -16,14 +16,22 @@
 ;; Tool names are normalized to lower case because the two schemas spell them
 ;; differently -- "Bash" nested, "bash" flat -- and a corpus that mixes them would
 ;; otherwise tally the same tool twice and rank both halves too low.
+(define (nth-or rest n fallback)
+  (cond ((null? rest) fallback)
+        ((= n 0) (car rest))
+        (else (nth-or (cdr rest) (- n 1) fallback))))
+
+;; Optional trailing values are (directory call at): where the call ran, the id
+;; that joins a call to its result, and when it happened. Only the hook adapter
+;; supplies the last two -- transcripts record neither -- which is why live
+;; observation can report latency and transcript analysis cannot.
 (define (event kind tool input bytes cache-read cache-created . rest)
   (list (list 'kind kind)
         (list 'tool (string-downcase tool))
         (list 'input input)
-        ;; Where the call was made. A recorded shell command only means anything
-        ;; in the directory it ran in, so the replay gate needs this or it is
-        ;; guessing.
-        (list 'directory (if (null? rest) "" (car rest)))
+        (list 'directory (nth-or rest 0 ""))
+        (list 'call (nth-or rest 1 ""))
+        (list 'at (nth-or rest 2 0))
         (list 'result-bytes bytes)
         (list 'cache-read-tokens cache-read)
         (list 'cache-created-tokens cache-created)))
@@ -82,13 +90,34 @@
           '()
           (list (event 'tool-result "" '() (payload-bytes result) 0 0))))))
 
+;; Toolscheme's own hook writes the third schema. It is the only one that records
+;; a working directory, a call id and a timestamp, because it watches the calls
+;; happen rather than reading what was written down afterwards.
+(define (hook-event record)
+  (let* ((tool (field-ref record "tool" ""))
+         (command (field-ref record "command" ""))
+         (post (string=? (field-ref record "event" "") "post"))
+         ;; Rebuilt so the shell analysis and repeat detection both work unchanged:
+         ;; a command when there is one, otherwise the clipped argument summary.
+         (input (if (string-null? command)
+                    (list (list "summary" (field-ref record "input" "")))
+                    (list (list "command" command)))))
+    (list (event (if post 'tool-result 'tool-call)
+                 tool
+                 input
+                 (field-ref record "bytes" 0)
+                 0 0
+                 (field-ref record "cwd" "")
+                 (field-ref record "call" "")
+                 (field-ref record "at" 0)))))
+
 ;; The two schemas are told apart by a field only the flat one has. Getting this
 ;; test wrong is invisible: every nested record falls through the flat parser,
 ;; which finds no tool calls in it and reports an empty corpus rather than an error.
 (define (events-of-record record)
-  (if (absent? (field-ref record "tool_name" #f))
-      (nested-event record)
-      (flat-event record)))
+  (cond ((equal? (field-ref record "source" #f) "toolscheme-hook") (hook-event record))
+        ((absent? (field-ref record "tool_name" #f)) (nested-event record))
+        (else (flat-event record))))
 
 ;; Accepts a path or the transcript text itself, so pasting a session into the
 ;; analyzer needs no file plumbing.

@@ -140,6 +140,14 @@ cannot be made without being counted.
 
 A structured failure counts as a call with an error, not as a missing call.
 
+## Standard input
+
+`--stdin` binds the process's standard input to `standard-input` as a string.
+Nothing in the language can reach it otherwise: a script that consumes stdin has to
+say so on the command line, so one that does not ask can never block on a pipe.
+This is what lets toolscheme serve as its own agent hook, reading the hook's JSON
+on stdin at about 2.5 ms per invocation.
+
 ## Published tools
 
 A published tool is an ordinary Scheme procedure plus the metadata an agent needs
