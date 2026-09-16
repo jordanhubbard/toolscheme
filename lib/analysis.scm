@@ -133,6 +133,15 @@
           (list 'command-samples (shape-samples bash))
           (list 'fusion-candidates (rows->records (top (tally (adjacent-pairs calls)) 10)
                                                   'sequence 'occurrences))
+          ;; A merged corpus spans agents, and they do not behave alike; reporting
+          ;; only the total hides exactly the comparison worth having.
+          (list 'agents (rows->records
+                          (top (tally (map (lambda (c) (field-ref c 'agent ""))
+                                           (filter (lambda (c) (not (string-null?
+                                                                      (field-ref c 'agent ""))))
+                                                   calls)))
+                               8)
+                          'agent 'calls))
           (list 'latency (latency-report events))
           (list 'repeats (repeat-report calls))
           (list 'cache (cache-report calls)))))

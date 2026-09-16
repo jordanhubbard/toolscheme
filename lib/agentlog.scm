@@ -27,6 +27,7 @@
 ;; observation can report latency and transcript analysis cannot.
 (define (event kind tool input bytes cache-read cache-created . rest)
   (list (list 'kind kind)
+        (list 'agent (nth-or rest 3 ""))
         (list 'tool (string-downcase tool))
         (list 'input input)
         (list 'directory (nth-or rest 0 ""))
@@ -111,7 +112,8 @@
                  0 0
                  (field-ref record "cwd" "")
                  (field-ref record "call" "")
-                 (field-ref record "at" 0)))))
+                 (field-ref record "at" 0)
+                 (field-ref record "agent" "")))))
 
 ;; Codex writes a fourth schema: one JSON object per rollout record, with tool
 ;; calls as `response_item` payloads. Unlike either Claude format it carries an

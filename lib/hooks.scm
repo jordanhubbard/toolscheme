@@ -51,6 +51,14 @@
          (command (let ((c (field-ref input "command" #f))) (if (string? c) c "")))
          (response (field-ref request "tool_response" #f)))
     (list (list "source" "toolscheme-hook")
+          ;; Which agent this came from. `turn_id` is Codex's own documented
+          ;; extension to the hook payload and Claude Code does not send it, which
+          ;; is a more reliable marker than the tool name: both spell a shell call
+          ;; "Bash". Worth keeping, because the two have measurably different
+          ;; habits and a merged corpus that cannot tell them apart averages them.
+          (list "agent" (cond ((not (absent? (field-ref request "turn_id" #f))) "codex")
+                              ((not (absent? (field-ref request "prompt_id" #f))) "claude-code")
+                              (else "unknown")))
           (list "event" (if finished "post" "pre"))
           (list "ok" (not (string=? event "PostToolUseFailure")))
           (list "session" (field-ref request "session_id" ""))

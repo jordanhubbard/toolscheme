@@ -114,6 +114,18 @@ Three things are worth knowing before doing that:
 
 Nothing rotates or prunes it yet.
 
+## Telling the agents apart
+
+Both agents spell a shell call `Bash`, so the tool name cannot distinguish them and
+a merged corpus would silently average two different sets of habits. Each record
+therefore carries an `agent`, keyed on `turn_id` -- Codex's own documented
+extension to the hook payload, which Claude Code does not send.
+
+This is not a cosmetic distinction. Across their transcript corpora the top command
+shape is `sed -n` for Codex and `head -20` for Claude Code: genuinely different
+ways of reading a file, and exactly the kind of difference that disappears into an
+average.
+
 ## The log is a stream, not a ledger
 
 An agent may invoke a hook more than once for the same event. Claude Code calls
