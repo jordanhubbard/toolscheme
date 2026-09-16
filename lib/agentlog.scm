@@ -16,10 +16,14 @@
 ;; Tool names are normalized to lower case because the two schemas spell them
 ;; differently -- "Bash" nested, "bash" flat -- and a corpus that mixes them would
 ;; otherwise tally the same tool twice and rank both halves too low.
-(define (event kind tool input bytes cache-read cache-created)
+(define (event kind tool input bytes cache-read cache-created . rest)
   (list (list 'kind kind)
         (list 'tool (string-downcase tool))
         (list 'input input)
+        ;; Where the call was made. A recorded shell command only means anything
+        ;; in the directory it ran in, so the replay gate needs this or it is
+        ;; guessing.
+        (list 'directory (if (null? rest) "" (car rest)))
         (list 'result-bytes bytes)
         (list 'cache-read-tokens cache-read)
         (list 'cache-created-tokens cache-created)))
@@ -57,7 +61,9 @@
          (usage (nested-usage record))
          (cache-read (field-ref usage "cache_read_input_tokens" 0))
          (cache-created (field-ref usage "cache_creation_input_tokens" 0))
-         (result (field-ref record "toolUseResult" #f)))
+         (result (field-ref record "toolUseResult" #f))
+         (directory (let ((cwd (field-ref record "cwd" #f)))
+                      (if (string? cwd) cwd ""))))
     (append
       ;; A turn's cache accounting belongs to the calls it made, so it rides on
       ;; the events rather than being reported separately.
@@ -68,7 +74,7 @@
                        (list (event 'tool-call
                                     (field-ref block "name" "")
                                     (field-ref block "input" '())
-                                    0 cache-read cache-created))
+                                    0 cache-read cache-created directory))
                        '()))
                  content))
           '())

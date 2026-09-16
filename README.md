@@ -39,7 +39,7 @@ host that the policy did not permit.
 ```sh
 toolscheme analyze ~/.claude/transcripts        # what is worth replacing, and why
 make loop                                       # prove a candidate before publishing
-ANTHROPIC_API_KEY=... make synthesize           # let a model write the next one
+make synthesize                                 # let a model write the next one
 ```
 
 Analysis of 158 transcripts — 14,129 events, 7,097 tool calls — runs in about three
@@ -50,6 +50,11 @@ A candidate is published only if it agrees with the tool it replaces on every
 replayed case *and* wins on bytes, latency, or stability. A deliberately lossy
 candidate that is both stabler and cheaper is refused, with the disagreeing line as
 evidence — winning on cost never substitutes for agreeing on the answer.
+
+`make synthesize` needs a credential: `NVIDIA_INFERENCE_API_KEY` for the NVIDIA
+inference gateway, or `ANTHROPIC_API_KEY` to talk to Anthropic directly. The gate
+only ever replays commands whose every program reads and reports — a corpus is full
+of commands that must never be re-run.
 
 Published tools live in `lib/tools/*.scm` with a provenance header naming the
 pattern that motivated them and what the replay measured. Publishing is writing a

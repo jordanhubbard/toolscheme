@@ -27,10 +27,11 @@ hermetic suite.
 
 | Check | Script | Proves |
 |---|---|---|
-| Log intake | `tests/intake-check.scm` | Both transcript schemas from pasted text, tool names merged across their spellings, cache tokens carried through |
+| Log intake | `tests/intake-check.scm` | Both transcript schemas from pasted text, tool names merged across their spellings, cache tokens and the recorded working directory carried through |
 | Tool library | `tests/tools-check.scm` | Every published tool carries a name, description, typed and documented parameters, a stability contract, and provenance |
 | MCP protocol | `tests/mcp-check.scm` | Handshake, tool listing, a derived JSON Schema that is an object rather than an array of pairs, `isError` on failure, parse and method errors, notifications answered with silence |
 | Synthesis request | `tests/synthesis-check.scm` | Cache breakpoint after the stable prefix, volatile report after it, structured output requested, valid JSON body |
 | Synthesis responses | `tests/synthesis-check.scm` | Refusal, malformed response, and success branches each return a structured result rather than raising |
+| Replay safety | `tests/replay-check.scm` | A destructive command is never offered for replay, and a safe shape does not launder the unsafe command line it appeared in |
 | Publication gate | `tests/replay-check.scm` | A real fused tool publishes; a lossy candidate that is stabler *and* cheaper is refused, with the disagreeing line as evidence |
-| Live loop | `tests/synthesize-live.scm` | Transcripts → opportunity → model → replay → published file. Needs `ANTHROPIC_API_KEY`; **unverified** |
+| Live loop | `tests/synthesize-live.scm` | Transcripts → opportunity → model → replay → published file. Needs a gateway credential, so it is run by hand with `make synthesize` rather than in the gate |

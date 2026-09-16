@@ -39,6 +39,28 @@
                    (list 'description "deliberately broken candidate")
                    (list 'procedure search-read-lossy)))
 
+;; Replaying means running. What the gate is allowed to execute is decided before
+;; any of this, by which samples the analyzer is willing to offer, so that rule is
+;; checked here rather than trusted: the shape being safe is not enough when the
+;; recorded line around it is not.
+(define safety
+  (let* ((log (string-append
+                "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
+                "{\"command\":\"grep -n x f.c | head -20\"}}\n"
+                "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
+                "{\"command\":\"rm -rf /tmp/scratch\"}}\n"
+                "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
+                "{\"command\":\"cd /repo && ./deploy.sh | head -c 100\"}}\n"))
+         (found (opportunities (analyze-events (field-ref (agent-log-events log) 'events))))
+         (offered (filter (lambda (o) (field-ref o 'replayable #f)) found))
+         (patterns (map (lambda (o) (field-ref o 'pattern)) offered)))
+    (list (list 'offered patterns)
+          (list 'safe-shape-offered (and (member "grep -n" patterns) #t))
+          (list 'destructive-refused (not (member "rm -rf" patterns)))
+          ;; `head -c` is a safe program, but the line it appeared in ran a deploy
+          ;; script. The shape must not launder the command around it.
+          (list 'unsafe-line-refused (not (member "head -c" patterns))))))
+
 (define good (replay "search-read" cases search-read->grep))
 (define bad (replay "search-read-lossy" cases search-read->grep))
 
@@ -56,6 +78,11 @@
 ;; the broken one must not.
 (list (list 'good (report "search-read" good))
       (list 'bad (report "search-read-lossy" bad))
-      (list 'gate-holds (and (field-ref good 'publish) (not (field-ref bad 'publish))))
+      (list 'safety safety)
+      (list 'gate-holds (and (field-ref good 'publish)
+                             (not (field-ref bad 'publish))
+                             (field-ref safety 'safe-shape-offered)
+                             (field-ref safety 'destructive-refused)
+                             (field-ref safety 'unsafe-line-refused)))
       (list 'rejection-evidence (field-ref bad 'disagreement))
       (list 'good-disagreement (field-ref good 'disagreement)))

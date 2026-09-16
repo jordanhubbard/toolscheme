@@ -18,13 +18,24 @@
 ;; corpus -- and the follow-up reads are part of what answering cost, so their
 ;; bytes are charged to the legacy path too. Otherwise a fused tool is compared
 ;; against only the cheapest half of what it replaces.
-(define (legacy-run command follow-up-reads)
+(define (legacy-run command follow-up-reads directory)
   (let ((started (field-ref (time) 'epoch-milliseconds))
-        (result (sh (list (list 'command command)))))
+        (result (sh (if (string-null? directory)
+                        (list (list 'command command))
+                        (list (list 'command command) (list 'directory directory))))))
     (if (error? result)
         result
         (let* ((finished (process-wait (field-ref result 'job)))
                (stdout (field-ref finished 'stdout ""))
+               ;; Whether the legacy output is itself stable has to be measured, not
+               ;; assumed. It decides whether the candidate's stability is a win or
+               ;; merely table stakes, and `cat` is stable while `ls -l` is not.
+               (again (sh (if (string-null? directory)
+                              (list (list 'command command))
+                              (list (list 'command command) (list 'directory directory)))))
+               (second (if (error? again)
+                           #f
+                           (field-ref (process-wait (field-ref again 'job)) 'stdout "")))
                (follow-up (fold-left
                             (lambda (n path)
                               (let ((read (catch-errors (lambda () (read-file path)))))
@@ -33,6 +44,7 @@
                                     (+ n (string-length (field-ref read 'text ""))))))
                             0 follow-up-reads)))
           (list (list 'output (normalize-output stdout))
+                (list 'stable (and (string? second) (string=? second stdout)))
                 (list 'status (field-ref finished 'exit-status -1))
                 (list 'bytes (+ (string-length stdout) follow-up))
                 (list 'command-bytes (string-length stdout))
@@ -66,10 +78,19 @@
 ;; no rendering is compared on its raw written form, which is strictly weaker.
 (define (default-render result) (write-to-string result))
 
+;; Both sides have to run where the command was recorded: the legacy side because
+;; its paths are relative to that directory, the candidate because its paths came
+;; out of the same command text. The working directory is restored afterwards so
+;; one case cannot move the ground under the next.
 (define (replay-case name case render)
-  (let* ((legacy (legacy-run (field-ref case 'command "")
-                             (field-ref case 'then-reads '())))
-         (candidate (candidate-run name (field-ref case 'arguments '()))))
+  (let* ((directory (field-ref case 'directory ""))
+         (origin (field-ref (pwd) 'path ""))
+         (moved (if (string-null? directory) #f (cd directory)))
+         (legacy (legacy-run (field-ref case 'command "")
+                             (field-ref case 'then-reads '())
+                             directory))
+         (candidate (candidate-run name (field-ref case 'arguments '())))
+         (restored (if (string-null? directory) #f (cd origin))))
     (cond
       ((error? legacy) (list (list 'verdict 'skipped) (list 'reason "legacy path unavailable")))
       ((error? candidate) (list (list 'verdict 'failed)
@@ -83,6 +104,7 @@
                 (list 'expected expected)
                 (list 'rendered rendered)
                 (list 'legacy-bytes (field-ref legacy 'bytes 0))
+                (list 'legacy-stable (field-ref legacy 'stable #f))
                 (list 'legacy-follow-up-bytes (field-ref legacy 'follow-up-bytes 0))
                 (list 'candidate-bytes (field-ref candidate 'bytes 0))
                 (list 'legacy-ms (field-ref legacy 'elapsed-ms 0))
@@ -113,15 +135,27 @@
                                (else (list (list 'command (field-ref (car rest) 'command ""))
                                            (list 'expected (field-ref (car rest) 'expected ""))
                                            (list 'rendered (field-ref (car rest) 'rendered "")))))))
-         (wins (or all-stable
-                   (< candidate-bytes legacy-bytes)
-                   (< candidate-ms legacy-ms))))
+         ;; A tool whose output churns invalidates the agent's prompt cache, so
+         ;; replacing an unstable command with a stable one is a real win. Being
+         ;; stable where the old command was already stable is not a win, it is the
+         ;; baseline -- and counting it as one published a tool that was bigger and
+         ;; no faster than the `cat` it replaced.
+         (legacy-stable (and (not (null? considered))
+                             (= (count-if (lambda (r) (field-ref r 'legacy-stable #f)) considered)
+                                (length considered))))
+         (stability-win (and all-stable (not legacy-stable)))
+         (wins (and all-stable
+                    (or stability-win
+                        (< candidate-bytes legacy-bytes)
+                        (< candidate-ms legacy-ms)))))
     (list (list 'tool name)
           (list 'cases (length results))
           (list 'considered (length considered))
           (list 'agreed agreed)
           (list 'equivalent equivalent)
           (list 'stable all-stable)
+          (list 'legacy-stable legacy-stable)
+          (list 'stability-win stability-win)
           (list 'legacy-bytes legacy-bytes)
           (list 'candidate-bytes candidate-bytes)
           (list 'legacy-ms legacy-ms)

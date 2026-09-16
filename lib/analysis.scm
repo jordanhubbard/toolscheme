@@ -94,6 +94,7 @@
                                       'tool 'calls))
           (list 'programs (rows->records (top (tally programs) 25) 'program 'calls))
           (list 'command-shapes (rows->records (top (tally commands) 25) 'shape 'calls))
+          (list 'command-samples (shape-samples bash))
           (list 'fusion-candidates (rows->records (top (tally (adjacent-pairs calls)) 10)
                                                   'sequence 'occurrences))
           (list 'repeats (repeat-report calls))
@@ -102,6 +103,53 @@
 ;; Turns the report into a ranked list of concrete opportunities, which is what
 ;; the synthesis step consumes. Each names the pattern and why it is worth
 ;; replacing, so the model is briefed rather than left to infer intent.
+;; Replaying a recorded command means *running* it. A corpus is full of commands
+;; that must never be re-run on someone's machine -- `rm`, `docker`, `git push`,
+;; a deploy script -- and full of commands that simply cannot run here, because
+;; they referenced another project's files. So a shape is only ever offered to the
+;; gate if its program is one that reads and reports and does nothing else. This
+;; list is deliberately short; adding to it is a decision about what the gate is
+;; allowed to execute, not a convenience.
+(define replay-safe-programs
+  '("grep" "egrep" "fgrep" "rg" "head" "tail" "cat" "wc" "ls" "find" "sort" "uniq"
+    "cut" "nl" "basename" "dirname" "file" "stat" "du" "df" "which" "tr" "column"))
+
+(define (replayable-shape? shape)
+  (and (member (shape-program shape) replay-safe-programs) #t))
+
+;; The shape being safe is not enough, and assuming otherwise is how a gate ends up
+;; running something it should not: a recorded line matching the shape `head -c`
+;; was `cd /home/jkh && time ./toolscheme analyze ... | head -c 3000`. Every command
+;; in the line has to be safe, not just the one the shape came from.
+(define (replayable-command? text)
+  (let ((programs (programs-in text)))
+    (and (not (null? programs))
+         (null? (filter (lambda (p) (not (member p replay-safe-programs))) programs)))))
+
+;; The concrete calls behind a shape, so the gate has something real to replay.
+;; Shapes are the pattern; these are the evidence.
+(define (shape-samples calls)
+  (flatten
+    (map (lambda (call)
+           (let ((text (bash-command (field-ref call 'input '())))
+                 (directory (field-ref call 'directory "")))
+             (map (lambda (shape) (list shape text directory)) (command-shapes text))))
+         calls)))
+
+(define (samples-for shape samples wanted)
+  (let loop ((rest samples) (seen '()) (commands '()) (n 0))
+    (cond ((or (null? rest) (= n wanted)) (reverse seen))
+          ((and (string=? (car (car rest)) shape)
+                (replayable-command? (cadr (car rest)))
+                (not (member (cadr (car rest)) commands)))
+           (loop (cdr rest)
+                 (cons (list (list 'command (cadr (car rest)))
+                             (list 'directory (caddr (car rest))))
+                       seen)
+                 (cons (cadr (car rest)) commands)
+                 (+ n 1)))
+          (else (loop (cdr rest) seen commands n)))))
+
 ;; Ranking by raw frequency picks `echo`, which is the busiest command in the
 ;; corpus and the least worth replacing: its output is progress text nobody parses.
 ;; An opportunity is only real if a structured, bounded, stable tool would return
@@ -123,20 +171,31 @@
   (not (string-contains? sequence "bash")))
 
 (define (opportunities report)
-  (let* ((shapes (filter (lambda (row) (worth-replacing? (field-ref row 'shape "")))
+  (let* ((samples (field-ref report 'command-samples '()))
+         (shapes (filter (lambda (row) (worth-replacing? (field-ref row 'shape "")))
                          (field-ref report 'command-shapes '())))
          (fusions (filter (lambda (row) (fusion-worth-replacing? (field-ref row 'sequence "")))
                           (field-ref report 'fusion-candidates '())))
          (scored
            (append
              (map (lambda (row)
-                    (list (list 'kind 'command)
-                          (list 'pattern (field-ref row 'shape))
-                          (list 'occurrences (field-ref row 'calls))
-                          ;; One call replaced saves one call.
-                          (list 'score (field-ref row 'calls))
-                          (list 'rationale
-                                "A shell command run often enough that a typed, bounded, stable-output replacement would pay for itself.")))
+                    (let ((shape (field-ref row 'shape "")))
+                      (list (list 'kind 'command)
+                            (list 'pattern shape)
+                            (list 'occurrences (field-ref row 'calls))
+                            ;; One call replaced saves one call.
+                            (list 'score (field-ref row 'calls))
+                            ;; Replayable means the gate has something it is allowed
+                            ;; to run: a safe shape *and* at least one recorded line
+                            ;; that is safe end to end.
+                            (list 'replayable
+                                  (and (replayable-shape? shape)
+                                       (not (null? (samples-for shape samples 1)))))
+                            (list 'samples (if (replayable-shape? shape)
+                                               (samples-for shape samples 5)
+                                               '()))
+                            (list 'rationale
+                                  "A shell command run often enough that a typed, bounded, stable-output replacement would pay for itself."))))
                   (take shapes (min 8 (length shapes))))
              (map (lambda (row)
                     (list (list 'kind 'fusion)
@@ -145,6 +204,11 @@
                           ;; Fusing a pair removes a whole round trip, so each
                           ;; occurrence is worth two calls, not one.
                           (list 'score (* 2 (field-ref row 'occurrences)))
+                          ;; A fusion's legacy side is two agent-native tool calls,
+                          ;; not a shell command, so there is nothing to replay
+                          ;; against yet. It is still worth reporting.
+                          (list 'replayable #f)
+                          (list 'samples '())
                           (list 'rationale
                                 "Two calls that repeatedly follow one another; one fused tool would halve the round trips.")))
                   (take fusions (min 5 (length fusions)))))))

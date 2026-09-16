@@ -1,6 +1,6 @@
 ;;; synthesis-check.scm -- what can be proven about the synthesis leg without a key.
 ;;;
-;;; The live call needs ANTHROPIC_API_KEY and is exercised by `make synthesize`.
+;;; The live call needs a gateway credential and is exercised by `make synthesize`.
 ;;; Everything else -- the request shape, the cache breakpoint, the structured
 ;;; output schema, and every response branch -- is checkable offline, and those are
 ;;; the parts that fail silently. A refusal returns HTTP 200 with no content block;
@@ -28,7 +28,7 @@
 (define schema-requested
   (equal? (field-ref (field-ref (field-ref reparsed "output_config" '()) "format" '()) "type" "")
           "json_schema"))
-(define model-is-current (equal? (field-ref reparsed "model" "") "claude-opus-5"))
+(define model-is-current (equal? (field-ref reparsed "model" "") synthesis-model))
 
 ;; Every response branch, driven by fabricated responses.
 (define (result-of json) (synthesis-result (list (list 'body json))))
@@ -37,6 +37,8 @@
   (result-of "{\"stop_reason\":\"refusal\",\"content\":[],\"usage\":{}}"))
 (define malformed
   (result-of "{\"stop_reason\":\"end_turn\",\"usage\":{}}"))
+(define truncated
+  (result-of "{\"stop_reason\":\"max_tokens\",\"content\":[{\"type\":\"text\",\"text\":\"{\\\"na\"}],\"usage\":{}}"))
 (define good
   (result-of
     (string-append
@@ -45,18 +47,26 @@
       "\"usage\":{\"cache_read_input_tokens\":4096,\"cache_creation_input_tokens\":0,"
       "\"output_tokens\":120}}")))
 
-;; No key configured must be a structured refusal, never a crash or a bare call.
-(define keyless (synthesize opportunity))
+;; With no credential configured this must be a structured refusal, never a crash
+;; and never an unauthenticated call. Skipped when a credential *is* present, since
+;; then the check would make a live request.
+(define keyless
+  (if (synthesis-credential)
+      (list (list 'code 'capability-missing) (list 'skipped "a credential is configured"))
+      (synthesize opportunity)))
 
 (list
   (list 'request (list (list 'cache-breakpoint-present breakpoint-present)
                        (list 'brief-excludes-volatile-report brief-is-stable)
                        (list 'report-after-breakpoint report-after-breakpoint)
                        (list 'structured-output schema-requested)
-                       (list 'model model-is-current)
+                       (list 'model synthesis-model)
+                       (list 'model-matches model-is-current)
+                       (list 'endpoint synthesis-endpoint)
                        (list 'body-is-valid-json (not (error? (json-parse body))))))
   (list 'responses (list (list 'refusal-detected (eq? (field-ref refusal 'code) 'refusal))
                          (list 'malformed-detected (error? malformed))
+                         (list 'truncation-named (eq? (field-ref truncated 'code) 'truncated))
                          (list 'tool-extracted
                                (equal? (field-ref (field-ref good 'tool) "name" "") "demo"))
                          (list 'cache-read-reported

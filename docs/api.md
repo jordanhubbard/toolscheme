@@ -117,6 +117,7 @@ The reference POSIX adapters (`toolscheme_posix.cpp`) take a `Policy`:
 | `root` | every path resolves inside this directory; traversal and symlink escapes are rejected before any host call |
 | `writable` | refuse mutating operations |
 | `allow_process`, `allowed_programs` | child processes are refused unless enabled; an empty allowlist with `allow_process` permits any program on the search path |
+| child working directory | `(directory ...)` on a process call is resolved against the root like every other path; absolute paths are accepted and one outside the root is refused |
 | `environment_allowlist` | what `env` reports and what children inherit |
 | `output_limit`, `default_timeout_ms` | bound every result and every wait |
 | `allow_terminal`, `allow_service`, `allow_logging`, `allow_desktop` | off by default |

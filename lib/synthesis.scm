@@ -10,14 +10,37 @@
 ;;; and the contract -- with the volatile opportunity report after it, so repeated
 ;;; synthesis reads the prefix from cache instead of re-paying for it.
 
-(define synthesis-model "claude-opus-5")
-(define synthesis-endpoint "https://api.anthropic.com/v1/messages")
-
-(define (anthropic-key)
-  (let ((found (env (list (list 'name "ANTHROPIC_API_KEY")))))
+;; The NVIDIA inference gateway fronts many providers behind one token. It is
+;; OpenAI-shaped on /v1/chat/completions, but it also speaks the Anthropic Messages
+;; API natively on /v1/messages -- structured output, cache_control breakpoints and
+;; all -- which is the shape this file already builds and parses. So only the host,
+;; the auth header and the model name differ from talking to Anthropic directly,
+;; and both are supported rather than one replacing the other.
+(define (env-value name)
+  (let ((found (env (list (list 'name name)))))
     (if (or (error? found) (null? (field-ref found 'variables '())))
         #f
         (cadr (car (field-ref found 'variables))))))
+
+(define synthesis-endpoint
+  (or (env-value "TOOLSCHEME_SYNTHESIS_ENDPOINT")
+      "https://inference-api.nvidia.com/v1/messages"))
+
+(define synthesis-model
+  (or (env-value "TOOLSCHEME_SYNTHESIS_MODEL") "azure/anthropic/claude-opus-5"))
+
+;; Credentials live in the environment, never in the repository. Which variable
+;; supplies the key also decides how it is presented: the gateway takes a bearer
+;; token, Anthropic directly takes x-api-key, and sending the wrong one is a 401
+;; that looks like a bad key rather than a bad header.
+(define (synthesis-credential)
+  (let ((gateway (env-value "NVIDIA_INFERENCE_API_KEY"))
+        (anthropic (env-value "ANTHROPIC_API_KEY")))
+    (cond (gateway (list (list 'key gateway) (list 'header "authorization")
+                         (list 'value (string-append "Bearer " gateway))))
+          (anthropic (list (list 'key anthropic) (list 'header "x-api-key")
+                           (list 'value anthropic)))
+          (else #f))))
 
 ;; What a synthesized tool must look like. Constraining the shape is what makes
 ;; the result usable without a parser, and what lets the replay gate check it.
@@ -35,9 +58,21 @@
                     (list "rationale" (list (list "type" "string")
                                             (list "description" "Why this is cheaper: fewer round trips, fewer bytes, or stabler output.")))
                     (list "stability_contract" (list (list "type" "string")
-                                                     (list "description" "Which fields are deterministic across identical calls.")))))
+                                                     (list "description" "Which fields are deterministic across identical calls.")))
+                    ;; Without these two the gate has nothing to do: it cannot build
+                    ;; a call to the new tool from a recorded command, and it cannot
+                    ;; tell whether the structured answer matches the text one.
+                    (list "translate_source"
+                          (list (list "type" "string")
+                                (list "description"
+                                      "Scheme source for (lambda (command) arguments): given one recorded shell command string, return the argument record to call this tool with.")))
+                    (list "legacy_form_source"
+                          (list (list "type" "string")
+                                (list "description"
+                                      "Scheme source for (lambda (result) text): render this tool's result exactly as the command it replaces prints it, so the two can be compared.")))))
         (list "required" (list "name" "description" "scheme_source" "replaces_pattern"
-                               "rationale" "stability_contract"))
+                               "rationale" "stability_contract" "translate_source"
+                               "legacy_form_source"))
         (list "additionalProperties" #f)))
 
 ;; The stable half of the prompt: it does not change between opportunities, so it
@@ -54,16 +89,30 @@
     "- Reach the host only through existing primitives; never invent a capability.\n\n"
     "Available primitives:\n"
     (string-join (map symbol->string (primitive-names)) " ")
+    "\n\nUse only the primitives listed above. Anything not on that list does not\n"
+    "exist, and a tool that calls it is rejected before it is ever replayed.\n"
+    "Note that list-ref and string-ref are 1-based, only #f is false, and every\n"
+    "tool takes exactly one argument: a record of (name value) fields.\n"
     "\n\nReturn a complete define-tool form, for example:\n"
     "(define-tool (list (list 'name \"search_read\")\n"
     "                   (list 'description \"...\")\n"
     "                   (list 'parameters (list (list \"pattern\" \"string\" \"...\" #t)))\n"
-    "                   (list 'procedure (lambda (arguments) ...))))\n"))
+    "                   (list 'procedure (lambda (arguments) ...))))\n"
+    "\nThe tool will be proved against the command it replaces by replaying real\n"
+    "recorded invocations, so it is not enough to write it: supply also\n"
+    "translate_source, which turns one of those recorded command strings into the\n"
+    "argument record for your tool, and legacy_form_source, which renders your\n"
+    "result in exactly the text the old command printed. Equivalence is judged on\n"
+    "that rendering. If they disagree on any recorded case the tool is refused,\n"
+    "however much cheaper it is.\n"))
 
 (define (synthesis-request opportunity)
   (list
     (list "model" synthesis-model)
-    (list "max_tokens" 16000)
+    ;; Three Scheme procedures in one structured object is a lot of output, and a
+    ;; truncated response is not partial data -- it is invalid JSON, which surfaces
+    ;; as a parse error that says nothing about the real cause.
+    (list "max_tokens" 32000)
     (list "system"
           (list (list (list "type" "text")
                       (list "text" (synthesis-brief))
@@ -77,12 +126,15 @@
                       (list "content"
                             (string-append
                               "Write one replacement tool for this measured pattern.\n\n"
-                              (write-to-string opportunity))))))))
+                              (write-to-string opportunity)
+                              "\n\nThe `samples` are real recorded invocations; your\n"
+                              "translate_source must handle them.\n")))))))
 
 (define (synthesize opportunity)
-  (let ((key (anthropic-key)))
-    (if (not key)
-        (list (list 'error "ANTHROPIC_API_KEY is not set")
+  (let ((credential (synthesis-credential)))
+    (if (not credential)
+        (list (list 'error
+                    "no synthesis credential: set NVIDIA_INFERENCE_API_KEY or ANTHROPIC_API_KEY")
               (list 'code 'capability-missing)
               (list 'operation 'synthesize))
         (let* ((body (field-ref (json-write (synthesis-request opportunity)) 'text))
@@ -90,9 +142,11 @@
                            (list (list 'url synthesis-endpoint)
                                  (list 'method "POST")
                                  (list 'timeout-ms 600000)
-                                 (list 'headers (list (list "x-api-key" key)
-                                                      (list "anthropic-version" "2023-06-01")
-                                                      (list "content-type" "application/json")))
+                                 (list 'headers
+                                       (list (list (field-ref credential 'header)
+                                                   (field-ref credential 'value))
+                                             (list "anthropic-version" "2023-06-01")
+                                             (list "content-type" "application/json")))
                                  (list 'body body)))))
           (if (error? response)
               response
@@ -108,6 +162,13 @@
           (cond
             ;; A refusal is a successful HTTP response with empty content; reading
             ;; content[0] without checking this is how that becomes a crash.
+            ;; Running out of output budget produces a valid HTTP response holding
+            ;; half an object. Saying so beats "unexpected end of JSON input".
+            ((string=? stop "max_tokens")
+             (list (list 'error "the model ran out of output budget before finishing")
+                   (list 'code 'truncated)
+                   (list 'operation 'synthesize)
+                   (list 'output-tokens (field-ref usage "output_tokens" 0))))
             ((string=? stop "refusal")
              (list (list 'error "the model declined this request")
                    (list 'code 'refusal)

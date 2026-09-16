@@ -15,7 +15,8 @@
     "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":"
     "[{\"type\":\"text\",\"text\":\"ok\"},"
     "{\"type\":\"tool_use\",\"name\":\"bash\",\"input\":{\"command\":\"grep -n x f\"}}],"
-    "\"usage\":{\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":250}}}\n"
+    "\"usage\":{\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":250}},"
+    "\"cwd\":\"/home/someone/project\"}\n"
     "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[]},"
     "\"toolUseResult\":{\"stdout\":\"a\\nb\\nc\"}}\n"))
 
@@ -31,8 +32,14 @@
           ((string=? (field-ref (car rest) 'tool "") "bash") (car rest))
           (else (loop (cdr rest))))))
 
+;; Only the nested schema records where a command ran, and the replay gate cannot
+;; re-run one without it: the same command means different things in different
+;; directories.
+(define nested-call (car (field-ref nested 'events)))
+
 (define checks
   (list (list 'flat-calls (field-ref flat 'calls))
+        (list 'working-directory (field-ref nested-call 'directory ""))
         (list 'nested-calls (field-ref nested 'calls))
         (list 'tool-names-merged (= (field-ref bash-row 'calls 0) 2))
         (list 'shell-parsed (= (field-ref both 'shell-calls) 2))
@@ -43,6 +50,7 @@
 (list (list 'checks checks)
       (list 'checks-hold
             (and (= (field-ref flat 'calls) 1)
+                 (string=? (field-ref nested-call 'directory "") "/home/someone/project")
                  (= (field-ref nested 'calls) 1)
                  (= (field-ref bash-row 'calls 0) 2)
                  (= (field-ref both 'shell-calls) 2)

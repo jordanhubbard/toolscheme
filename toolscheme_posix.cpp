@@ -1832,7 +1832,25 @@ private:
                     environment.push_back(text);
             }
         }
-        const std::string directory = string_option(options, "directory", policy_.root);
+        // Every other path in the API is relative to the sandbox root; a child's
+        // working directory has to be too, or callers silently get a chdir failure
+        // (exit 126, no output) for a path that reads as perfectly valid. An
+        // absolute path is still accepted, and still has to be inside the root.
+        std::string directory = string_option(options, "directory", policy_.root);
+        if (!directory.empty() && directory != policy_.root) {
+            if (directory.front() != '/') directory = policy_.root + "/" + directory;
+            char real[PATH_MAX], root_real[PATH_MAX];
+            if (::realpath(directory.c_str(), real) == nullptr)
+                return errno_error("process-start", errno, directory);
+            directory = real;
+            if (::realpath(policy_.root.c_str(), root_real) != nullptr) {
+                const std::string root_text(root_real);
+                if (directory != root_text &&
+                    directory.compare(0, root_text.size() + 1, root_text + "/") != 0)
+                    return denied_result("process-start",
+                                         "working directory escapes the sandbox root");
+            }
+        }
 
         std::vector<std::string> argv_storage{resolved};
         argv_storage.insert(argv_storage.end(), args.begin(), args.end());

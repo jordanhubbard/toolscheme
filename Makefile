@@ -51,23 +51,58 @@ bench: toolscheme_bench
 # publish and the lossy one must be refused, even though it is stabler and cheaper.
 # A gate that cannot reject is not a gate. Needs a shell and grep, so it stays out
 # of the hermetic suite.
+
+# Each check prints its report and then has to contain the passing marker. The
+# report is captured and echoed rather than teed: `tee /dev/stderr` opens the
+# target with O_TRUNC, so under `make check > log 2>&1` every earlier stage is
+# erased and the log ends up one line long.
+define check-scheme
+out=$$(./toolscheme $(1)); echo "$$out"; echo "$$out" | grep -q '$(2)'
+endef
+
 loop: toolscheme
-	./toolscheme tests/intake-check.scm --lib lib | tee /dev/stderr | grep -q '(checks-hold #t)'
-	./toolscheme tests/tools-check.scm --lib lib | tee /dev/stderr | grep -q '(checks-hold #t)'
-	./toolscheme tests/mcp-check.scm --lib lib | tee /dev/stderr | grep -q '(checks-hold #t)'
-	./toolscheme tests/synthesis-check.scm --lib lib | tee /dev/stderr | grep -q '(checks-hold #t)'
-	./toolscheme tests/replay-check.scm --lib lib --allow-process \
-	  --allow-program grep --allow-program head --allow-program sh --allow-program bash \
-	  | tee /dev/stderr | grep -q '(gate-holds #t)'
+	@$(call check-scheme,tests/intake-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/tools-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/synthesis-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/replay-check.scm --lib lib --allow-process \
+	  --allow-program grep --allow-program head --allow-program sh --allow-program bash,(gate-holds #t))
 
 # The full gate: warning-clean optimized build, sanitizers, fuzzing, benchmarks,
 # and the loop.
 check: test sanitize fuzz bench loop
 
-# The live synthesis call. Needs ANTHROPIC_API_KEY; never a secret in the repo.
+# The live synthesis call against the NVIDIA inference gateway, which speaks the
+# Anthropic Messages API natively on /v1/messages.
+#
+# The credential is resolved here and handed over as an environment variable rather
+# than as a file the interpreter has to reach: the token lives outside the sandbox
+# root, and widening the root to fetch it would trade a real boundary for a
+# convenience. Never a secret in the repo.
+#
+# The replay side runs recorded commands, so the allowlist below is the complete
+# set of programs the gate may execute. It matches replay-safe-programs in
+# lib/analysis.scm, which is what decides a sample is offered at all; a command
+# needing anything else is never replayed and its tool is never published.
+SYNTHESIS_KEY_FILE ?= $(HOME)/Documents/API_KEYS/nvidia-inference.txt
+# The nested schema is the default because only it records the working directory
+# each command ran in, and a recorded command cannot be replayed without that.
+TRANSCRIPTS ?= .claude/projects
+# Optional: PATTERN='grep -n' points the loop at one opportunity instead of the
+# highest ranked one.
+REPLAY_PROGRAMS = sh grep egrep fgrep head tail cat wc ls find sort uniq cut nl \
+                  basename dirname file stat du df which tr column
+REPLAY_ALLOW = $(foreach p,$(REPLAY_PROGRAMS),--allow-program $(p))
+
 synthesize: toolscheme
-	@test -n "$$ANTHROPIC_API_KEY" || { echo "set ANTHROPIC_API_KEY first"; exit 2; }
-	./toolscheme tests/synthesize-live.scm --lib lib --allow-process --allow-program curl
+	@key="$${NVIDIA_INFERENCE_API_KEY:-$$(cat '$(SYNTHESIS_KEY_FILE)' 2>/dev/null)}"; \
+	 if [ -z "$$key" ] && [ -z "$$ANTHROPIC_API_KEY" ]; then \
+	   echo "no credential: export NVIDIA_INFERENCE_API_KEY, or put the token in"; \
+	   echo "$(SYNTHESIS_KEY_FILE) (override with SYNTHESIS_KEY_FILE=...)"; \
+	   exit 2; \
+	 fi; \
+	 NVIDIA_INFERENCE_API_KEY="$$key" ./toolscheme tests/synthesize-live.scm '$(TRANSCRIPTS)' $(PATTERN) \
+	   --root "$(HOME)" --lib "$(CURDIR)/lib" --allow-process --allow-program curl $(REPLAY_ALLOW)
 
 clean:
 	rm -f toolscheme toolscheme_test toolscheme_test_san toolscheme_fuzz toolscheme_bench

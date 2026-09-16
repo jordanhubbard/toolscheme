@@ -455,6 +455,7 @@ Grounded in 158 real transcripts rather than guesswork; see
 - m1.2 Telemetry at `dispatch_capability()`, `shell-parse` tokenizer, `platform-facts` probe.
 - m1.3 Log intake for both transcript schemas, from a path or pasted text.
 - m1.4 Analysis: hot tools, shell-AST command shapes, repeats, output cost, fusion candidates, ranked by recoverable waste.
-- m1.5 Synthesis over the HTTP capability with structured output and a cache breakpoint. **The live call is unverified: no API key in the development environment.**
-- m1.6 Differential replay gate: equivalence by rendering, cost charged for follow-up reads, publication only when equivalent *and* winning.
-- m1.7 Publication: `define-tool`, `tool-manifest`, provenance headers, MCP export.
+- m1.5 Synthesis over the HTTP capability with structured output and a cache breakpoint, live against the NVIDIA inference gateway or Anthropic directly.
+- m1.6 Differential replay gate: equivalence by rendering, cost charged for follow-up reads, cases replayed in the directory they were recorded in, and publication only when equivalent *and* winning on an axis the old command did not already hold.
+- m1.7 Replay safety: only shapes whose every command reads and reports are eligible to be re-run.
+- m1.8 Publication: `define-tool`, `tool-manifest`, provenance headers, MCP export.

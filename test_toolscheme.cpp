@@ -1261,6 +1261,23 @@ static void milestone_0_git(Interpreter& vm) {
     check(!files_only.has_primitive("git"), "m0 git needs the process capability");
 }
 
+static void milestone_1_process_directory(Interpreter& vm) {
+    // Every other path in the API is relative to the sandbox root, so a child's
+    // working directory has to be too. When it was not, a perfectly valid-looking
+    // relative path produced a chdir failure -- exit 126 and no output -- which
+    // reads as a broken command rather than a rejected path.
+    const Value relative = vm.eval("(sh '((command \"pwd\") (directory \"m0\")))");
+    check(toolscheme::option(relative, "error").type() != Value::Type::String,
+          "m1 a child's working directory may be given relative to the root");
+
+    // An absolute path inside the root still works, and one outside is refused as
+    // a policy decision rather than an errno.
+    error_code(vm, "(sh '((command \"pwd\") (directory \"../..\")))", "permission-denied",
+               "m1 a child may not escape the sandbox root");
+    error_code(vm, "(sh '((command \"pwd\") (directory \"no-such-directory\")))", "not-found",
+               "m1 a missing working directory is reported, not silently ignored");
+}
+
 // ---------------------------------------------------------------------------
 // Milestone 1: observation surface
 // ---------------------------------------------------------------------------
@@ -1498,6 +1515,7 @@ int main() {
     milestone_0_sed(vm);
     milestone_0_stability(vm);
     milestone_0_git(vm);
+    milestone_1_process_directory(vm);
     milestone_1_shell_parse(vm);
     milestone_1_platform_facts(vm);
     milestone_1_telemetry(vm);
