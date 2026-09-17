@@ -113,3 +113,41 @@
                        (else (loop (cdr rest) (car (car rest)) (cons (car rest) out))))))
          (ordered (list-sort kept (lambda (a b) (< (cadr a) (cadr b))))))
     (map caddr ordered)))
+
+;; Configuration that has to hold however the agent was started. An environment
+;; variable only reaches a hook if the agent inherited it, and whether it did
+;; depends on whether the session began from a shell, a desktop launcher, or
+;; another agent -- so the variable wins when it is set, and a file beside the
+;; observations answers when it is not. Lines are NAME=value; # begins a comment.
+;; Split out so the parsing can be exercised without a file: whether a comment, a
+;; stray space, or a name that merely starts the same is handled correctly is the
+;; part that can be wrong.
+(define (setting-in-lines lines name)
+  (cond
+    ((null? lines) #f)
+    (else
+      (let* ((line (string-trim (car lines)))
+             (cut (string-index line "=")))
+        (if (or (string-null? line)
+                (string-prefix? "#" line)
+                (not cut)
+                (not (string=? (string-trim (substring line 1 (- cut 1))) name)))
+            (setting-in-lines (cdr lines) name)
+            (string-trim (substring line (+ cut 1) (string-length line))))))))
+
+(define (setting-from-file name)
+  (let ((file (catch-errors (lambda () (read-file "config" '((limit 16384)))))))
+    (if (error? file)
+        #f
+        (setting-in-lines (field-ref (text-lines (field-ref file 'text "")) 'lines) name))))
+
+(define (setting name)
+  (let ((from-environment (env-value name)))
+    (if (string? from-environment) from-environment (setting-from-file name))))
+
+(define (setting-on? name)
+  (let ((value (setting name)))
+    (and (string? value)
+         (not (string=? value ""))
+         (not (string=? value "0"))
+         (not (string=? value "false")))))

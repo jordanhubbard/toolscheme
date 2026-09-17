@@ -16,9 +16,7 @@
 
 (define steer-sleep-threshold-ms 10000)
 
-(define (steer-enabled?)
-  (let ((flag (env-value "TOOLSCHEME_STEER")))
-    (and (string? flag) (not (string=? flag "0")) (not (string=? flag "")))))
+(define (steer-enabled?) (setting-on? "TOOLSCHEME_STEER"))
 
 ;; Recent history for one session only. Scanning the shared log would cost more on
 ;; every call as the corpus grows and would read other sessions' work for nothing;
@@ -34,17 +32,41 @@
         (filter (lambda (l) (not (string-null? l)))
                 (field-ref (text-lines (field-ref file 'text "")) 'lines)))))
 
-(define (remember-key session key)
-  (let ((path (session-key-path session)))
-    (if (error? (catch-errors
-                  (lambda () (write-file path (string-append key "\n") '((append #t))))))
+;; Each line is the invocation key and the call it belonged to. The call id is not
+;; decoration: Claude Code invokes the hook twice for every tool call, so a key
+;; recorded by the first invocation is already there when the second one looks, and
+;; counting lines would report every single call as a repeat of itself. This was
+;; caught by the advice firing on a call that had not been repeated.
+(define (remember-key session key call)
+  (let* ((path (session-key-path session))
+         ;; The call comes first because it cannot contain a tab and the key can:
+         ;; splitting on the first separator then always finds the right boundary.
+         (line (string-append call "\t" key "\n"))
+         (write-once (lambda () (write-file path line '((append #t))))))
+    (if (error? (catch-errors write-once))
         (begin (catch-errors (lambda () (mkdir "sessions" '((parents #t)))))
-               (catch-errors
-                 (lambda () (write-file path (string-append key "\n") '((append #t))))))
+               (catch-errors write-once))
         #t)))
 
-(define (count-key keys key)
-  (count-if (lambda (k) (string=? k key)) keys))
+(define (line-call line)
+  (let ((cut (string-index line "\t")))
+    (if cut (substring line 1 (- cut 1)) line)))
+
+(define (line-key line)
+  (let ((cut (string-index line "\t")))
+    (if cut (substring line (+ cut 1) (string-length line)) "")))
+
+;; Counts the *calls* that used this key, not the lines recording them, and never
+;; counts the call now being made.
+(define (count-key keys key current-call)
+  (let loop ((rest keys) (seen '()) (n 0))
+    (cond
+      ((null? rest) n)
+      ((or (not (string=? (line-key (car rest)) key))
+           (string=? (line-call (car rest)) current-call)
+           (member (line-call (car rest)) seen))
+       (loop (cdr rest) seen n))
+      (else (loop (cdr rest) (cons (line-call (car rest)) seen) (+ n 1))))))
 
 ;; The command's identity for repeat detection. Deliberately the whole command:
 ;; `grep x a` and `grep x b` are not the same work, and normalizing them together
@@ -76,15 +98,23 @@
                    (if (number? seconds) (* 1000 seconds) 0)))
                 (else (loop (cdr rest)))))))))
 
-(define (advice-for request keys)
+;; Seen this exact call already? Then this is the agent's second invocation of the
+;; hook for one tool call, and whatever was worth saying was said on the first.
+;; Without this the model receives the same sentence twice.
+(define (already-seen? keys call)
+  (and (not (string-null? call))
+       (> (count-if (lambda (line) (string=? (line-call line) call)) keys) 0)))
+
+(define (advice-for request keys call)
   (let ((slept (sleeping-for request))
         (key (steer-key request)))
     (cond
+      ((already-seen? keys call) #f)
       ;; Said once per session: the point is made, and repeating it every call
       ;; would cost more context than the advice saves.
       ((and (>= slept steer-sleep-threshold-ms)
-            (= (count-key keys "\tADVISED-SLEEP") 0))
-       (list (list 'kind "\tADVISED-SLEEP")
+            (= (count-key keys "ADVISED-SLEEP" "") 0))
+       (list (list 'kind "ADVISED-SLEEP")
              (list 'text
                    (string-append
                      "This waits a fixed " (number->string (quotient slept 1000))
@@ -93,13 +123,13 @@
                      "and `(process-expect JOB TEXT)`, which return the moment it does "
                      "and report whether it happened or the deadline expired."))))
       ;; Said every time, because it names a specific call and stays true.
-      ((> (count-key keys key) 0)
+      ((> (count-key keys key call) 0)
        (list (list 'kind #f)
              (list 'text
                    (string-append
                      "You have already run this exact invocation "
-                     (number->string (count-key keys key))
-                     (if (= (count-key keys key) 1) " time" " times")
+                     (number->string (count-key keys key call))
+                     (if (= (count-key keys key call) 1) " time" " times")
                      " in this session. If nothing has changed since, you already have "
                      "the answer."))))
       (else #f))))
@@ -111,12 +141,15 @@
           (not (equal? (field-ref request "hook_event_name" "") "PreToolUse")))
       #f
       (let* ((session (field-ref request "session_id" ""))
+             (call (field-ref request "tool_use_id" ""))
              (keys (session-keys session))
-             (found (advice-for request keys))
+             (found (advice-for request keys call))
              (key (steer-key request)))
-        (remember-key session key)
+        (remember-key session key call)
         (if (not found)
             #f
             (begin
-              (if (field-ref found 'kind) (remember-key session (field-ref found 'kind)) #f)
+              (if (field-ref found 'kind)
+                  (remember-key session (field-ref found 'kind) call)
+                  #f)
               (field-ref found 'text))))))

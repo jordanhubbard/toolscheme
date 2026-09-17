@@ -202,6 +202,14 @@ say so on the command line, so one that does not ask can never block on a pipe.
 This is what lets toolscheme serve as its own agent hook, reading the hook's JSON
 on stdin at about 2.5 ms per invocation.
 
+## Settings
+
+Behaviour that has to hold however an agent was started is read from the
+environment first and from `config` in the state directory otherwise, because an
+environment variable only reaches a hook if the agent inherited it. `NAME=value`
+per line, `#` for comments, `0` or `false` to disable. The environment wins when
+both answer.
+
 ## Published tools
 
 A published tool is an ordinary Scheme procedure plus the metadata an agent needs

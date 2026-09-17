@@ -32,9 +32,7 @@
 
 ;; Off unless asked for. Installing the observer must never start changing
 ;; behaviour on its own.
-(define (redirect-enabled?)
-  (let ((flag (env-value "TOOLSCHEME_REDIRECT")))
-    (and (string? flag) (not (string=? flag "0")) (not (string=? flag "")))))
+(define (redirect-enabled?) (setting-on? "TOOLSCHEME_REDIRECT"))
 
 ;; A tool's claim is only as good as its evidence. `proven` is written by the
 ;; replay gate and lists the shapes it actually agreed on; a shape named in

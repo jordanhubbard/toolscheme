@@ -185,6 +185,25 @@ Advice alone carries no `permissionDecision`: Codex rejects `allow` unless a
 rewrite accompanies it, and adding one would turn a note into a permission grant
 the hook never meant to make.
 
+### Turning it on for every session
+
+An environment variable only reaches a hook if the agent inherited it, and whether
+it did depends on whether the session began from a shell, a desktop launcher, or
+another agent. So a setting is read from the environment when it is there and from
+a file beside the observations when it is not:
+
+```
+# ~/.local/state/toolscheme/config
+TOOLSCHEME_STEER=1
+```
+
+`NAME=value` per line, `#` for comments, `0` or `false` to turn something off. The
+environment wins where both say something, so a single session can differ from the
+default without editing anything. `TOOLSCHEME_REDIRECT` is read the same way.
+
+Verified against a live Codex session with `TOOLSCHEME_STEER` explicitly unset in
+its environment: the advice still arrived.
+
 ## Keeping the installation current
 
 The hook runs the *installed* copy, not the checkout. After changing anything under
