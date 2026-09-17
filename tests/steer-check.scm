@@ -28,6 +28,18 @@
 (define short (sleeping-for (bash-request "s" "sleep 2")))
 (define piped (sleeping-for (bash-request "s" "make build && sleep 30")))
 
+;; The corpus showed 45-to-60 second sleeps because Codex's sleep tool takes a
+;; duration; in a shell an agent polls instead, and a threshold tuned to the corpus
+;; misses that entirely. An experiment against this very advice caught it: 36
+;; one-second sleeps went by unremarked because none was ten seconds long.
+(define poll-advice (said (bash-request "s" "while [ ! -f x ]; do sleep 1; done") '()))
+
+;; And a sleep the agent backgrounded is the work being simulated, not the agent
+;; waiting for it. Accusing that is worse than staying quiet, and teaching the
+;; tokenizer about subshells is what started it happening.
+(define background-only (said (bash-request "s" "(sleep 25; touch ONE) &") '()))
+(define background-then-wait (said (bash-request "s" "(sleep 25; touch ONE) & sleep 30") '()))
+
 (define sleep-advice (said (bash-request "s" "sleep 55") '()))
 (define sleep-again (said (bash-request "s" "sleep 45") '("EARLIER\tADVISED-SLEEP")))
 (define short-advice (said (bash-request "s" "sleep 2") '()))
@@ -98,6 +110,9 @@
         (list 'short-sleep-ms short)
         (list 'sleep-in-a-pipeline-ms piped)
         (list 'advises-on-long-sleep (and sleep-advice #t))
+        (list 'advises-on-polling-loop (and poll-advice #t))
+        (list 'silent-on-backgrounded-work (not background-only))
+        (list 'advises-on-the-wait-beside-it (and background-then-wait #t))
         (list 'silent-when-already-said (not sleep-again))
         (list 'silent-on-short-sleep (not short-advice))
         (list 'advises-on-repeat (and repeat-advice #t))
@@ -121,6 +136,9 @@
                  (= short 2000)
                  (= piped 30000)
                  (and sleep-advice #t)
+                 (and poll-advice #t)
+                 (not background-only)
+                 (and background-then-wait #t)
                  (not sleep-again)
                  (not short-advice)
                  (and repeat-advice #t)

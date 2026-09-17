@@ -148,7 +148,20 @@
               (append (field-ref rewrite "hookSpecificOutput")
                       (list (list "additionalContext" text))))))
 
+(define (session-decision request)
+  (let ((note (catch-errors (lambda () (session-start-advice request)))))
+    (if (or (error? note) (not (string? note)))
+        #f
+        (list (list "hookSpecificOutput"
+                    (list (list "hookEventName" "SessionStart")
+                          (list "additionalContext" note)))))))
+
 (define (hook-decision request)
+  (if (equal? (field-ref request "hook_event_name" "") "SessionStart")
+      (session-decision request)
+      (tool-decision request)))
+
+(define (tool-decision request)
   (let* ((rewrite (catch-errors
                     (lambda ()
                       (if (equal? (field-ref request "hook_event_name" "") "PreToolUse")

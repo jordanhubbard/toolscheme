@@ -89,8 +89,13 @@
       ((number? declared) declared)
       ((null? parsed) 0)
       (else
+        ;; A sleep the agent backgrounded is the work being simulated, not the agent
+        ;; waiting for it: `(sleep 25; touch READY) &` returns at once. Counting it
+        ;; turns every such setup into a false accusation -- which is what teaching
+        ;; the tokenizer about subshells immediately caused.
         (let loop ((rest parsed))
           (cond ((null? rest) 0)
+                ((field-ref (car rest) 'background #f) (loop (cdr rest)))
                 ((string=? (field-ref (car rest) 'name "") "sleep")
                  (let ((seconds (string->number
                                   (let ((args (field-ref (car rest) 'arguments '())))
@@ -104,6 +109,24 @@
 (define (already-seen? keys call)
   (and (not (string-null? call))
        (> (count-if (lambda (line) (string=? (line-call line) call)) keys) 0)))
+
+;; The corpus showed 45-to-60 second sleeps because Codex's `sleep` tool takes a
+;; duration. In a shell an agent polls instead -- `while [ ! -f x ]; do sleep 1;
+;; done` -- and a threshold tuned to the corpus misses that completely. An
+;; experiment run against this very advice caught it: thirty-six one-second sleeps
+;; went by without a word, because none of them was ten seconds long.
+(define loop-keywords '("while" "until" "for"))
+
+(define (polling-loop? request)
+  (let* ((command (hook-command-of (field-ref request "tool_input" '())))
+         (parsed (filter (lambda (c) (not (field-ref c 'background #f)))
+                         (field-ref (shell-parse command) 'commands '())))
+         (names (map (lambda (c) (field-ref c 'name "")) parsed)))
+    (and (member "sleep" names)
+         ;; A loop keyword is grammar, so shell-parse drops it from the command
+         ;; list; its presence has to be read from the text.
+         (any? (lambda (word) (string-contains? command word)) loop-keywords)
+         #t)))
 
 (define (advice-for request keys call)
   (let ((slept (sleeping-for request))
@@ -127,6 +150,22 @@
                      "  toolscheme -e '(wait-for (quote (matches \"some.log\" \"ready\")))'\n"
                      "It reports whether the condition was met or the deadline expired, "
                      "and takes (timeout-ms N)."))))
+      ;; A polling loop is the same mistake at a finer grain, and worth saying once
+      ;; per session for the same reason.
+      ((and (polling-loop? request)
+            (= (count-key keys "ADVISED-SLEEP" "") 0))
+       (list (list 'kind "ADVISED-SLEEP")
+             (list 'text
+                   (string-append
+                     "This polls in a loop. `toolscheme` is on PATH and blocks until the "
+                     "condition holds, waking on the event rather than on a timer:
+"
+                     "  toolscheme -e '(wait-for (quote (exists \"some/path\")))'
+"
+                     "  toolscheme -e '(wait-for (quote (matches \"some.log\" \"ready\")))'
+"
+                     "It takes (timeout-ms N) and reports whether the condition held or "
+                     "the deadline expired."))))
       ;; Said every time, because it names a specific call and stays true.
       ((> (count-key keys key call) 0)
        (list (list 'kind #f)
@@ -158,3 +197,37 @@
                   (remember-key session (field-ref found 'kind) call)
                   #f)
               (field-ref found 'text))))))
+
+
+;; ---------------------------------------------------------------------------
+;; Saying it once, before it matters
+;; ---------------------------------------------------------------------------
+;;
+;; PreToolUse advice is reactive: it fires when the agent has already decided to
+;; sleep for a minute, and since the call is not blocked, that minute is still
+;; spent. Only the next one can be better. SessionStart is the same information
+;; delivered before the decision, which costs one injection per session instead of
+;; one per matching call.
+;;
+;; Kept deliberately short. This is charged to every session's context whether or
+;; not it turns out to be relevant, so it earns its place by being four lines that
+;; can be acted on directly, not a catalogue.
+(define session-start-note
+  (string-append
+    "`toolscheme` is on PATH. When waiting for something to happen, it returns the "
+    "moment it does rather than after a fixed delay:\n"
+    "  toolscheme -e '(wait-for (quote (exists \"path/to/file\")))'\n"
+    "  toolscheme -e '(wait-for (quote (matches \"some.log\" \"ready\")))'\n"
+    "Both take (timeout-ms N) and report whether the condition held or the deadline "
+    "expired. Prefer them to a fixed `sleep` when the wait has an observable end."))
+
+(define (session-start-advice request)
+  (let* ((session (field-ref request "session_id" ""))
+         (keys (session-keys session)))
+    (cond
+      ((not (steer-enabled?)) #f)
+      ;; An agent may start a session hook more than once, as it does for tools.
+      ((> (count-key keys "SESSION-ADVICE" "") 0) #f)
+      (else
+        (remember-key session "SESSION-ADVICE" "session")
+        session-start-note))))

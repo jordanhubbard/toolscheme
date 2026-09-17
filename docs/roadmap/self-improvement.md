@@ -284,6 +284,41 @@ competing with the page cache for microseconds.
 ranges through `sed` where Claude Code has a native read tool, and a ranged read is
 not a tight scanning loop we would lose.
 
+## Running the intervention instead of arguing from the corpus
+
+Everything above is an argument from observation, and observation cannot separate a
+missing tool from a missing instruction. `tests/steering-experiment.sh` runs the
+same task with the per-call advice on and off and reads the result out of the
+observation log.
+
+Three attempts, each of which failed in a way worth keeping:
+
+1. **The treatment was never delivered.** Zero advice reached any trial, because
+   Codex silently skips a hook it has not been asked to trust, and the SessionStart
+   hook had just been added. The arms looked identical and the null result meant
+   nothing. The harness now refuses to report unless it can show the treatment
+   arrived.
+2. **The trigger did not match the behaviour.** The agents polled with `sleep 1` in
+   a loop, thirty-six times, and the threshold was tuned to the corpus's 45-to-60
+   second sleeps. A polling loop is now its own trigger. Two parser gaps fell out
+   of the same run: a subshell was not tokenized at all, so `(sleep 25; touch x) &`
+   parsed its first command as `(sleep`, and backgrounding was not tracked, so once
+   subshells *were* parsed, every backgrounded setup looked like a wait.
+3. **The control was not a control.** Both arms adopted the tool, because the
+   instruction also lives in `AGENTS.md`, which every session loads whatever the
+   flag says.
+
+The third failure is the interesting one, and it answers the question the corpus
+could not. Agents ran `toolscheme -e '(wait-for (quote (exists "ONE")))'` **without
+any per-call advice at all**. A one-line instruction in a file the agent already
+reads, plus a tool that works when invoked plainly, was enough. The reactive hook
+advice added nothing measurable on this task.
+
+That is six trials of one task and not a general law. But it points the opposite
+way from where this work has been heading: the expensive machinery -- per-call
+advice, rewriting, proving equivalence -- may be worth far less than making the
+tool reachable and saying so once, in the place the agent already looks.
+
 ## Open
 
 - **A cost-only win is not yet distinguishable from a correctness win.** The gate

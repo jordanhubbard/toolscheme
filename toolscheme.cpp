@@ -5917,6 +5917,7 @@ struct ShellCommand {
     std::vector<Value> redirections;
     std::string connector;  // how this command joins the next: | && || ; &
     bool header = false;    // a `for`/`case` word list, not a command anyone ran
+    bool background = false; // ended with `&`, or inside a group that did
 };
 
 // Shell grammar words that occupy command position without being programs. The
@@ -5973,6 +5974,8 @@ std::vector<ShellCommand> shell_split(const std::string& source,
     bool have_token = false, token_quoted = false;
     std::vector<std::pair<std::string, bool>> pending_heredocs;
     std::string pending_redirection;
+    std::vector<std::size_t> group_starts;
+    std::size_t closed_group = static_cast<std::size_t>(-1);
 
     const auto flush_token = [&] {
         if (!have_token) return;
@@ -6039,6 +6042,25 @@ std::vector<ShellCommand> shell_split(const std::string& source,
                 heredoc_bodies.push_back(body);
             }
             pending_heredocs.clear();
+            continue;
+        }
+        // A subshell is a boundary, not a word. Without this `(sleep 25; touch x) &`
+        // parses its first command as `(sleep`, so nothing inside a grouping is
+        // ever seen -- which hid a polling loop from the analysis that was looking
+        // for exactly that.
+        if (c == '(' || c == ')') {
+            // The token has to be flushed first or the closing paren sticks to the
+            // last word: `(b; c)` reported a program called `c)`.
+            flush_token();
+            flush_command(c == ')' ? ";" : "");
+            if (c == '(') {
+                group_starts.push_back(commands.size());
+                closed_group = static_cast<std::size_t>(-1);
+            } else if (!group_starts.empty()) {
+                closed_group = group_starts.back();
+                group_starts.pop_back();
+            }
+            ++i;
             continue;
         }
         if (std::isspace(static_cast<unsigned char>(c))) { flush_token(); ++i; continue; }
@@ -6126,6 +6148,19 @@ std::vector<ShellCommand> shell_split(const std::string& source,
             flush_token();
             if (found == "|" || found == "&&" || found == "||" || found == ";" || found == "&") {
                 flush_command(found);
+                // `&` backgrounds whatever preceded it: the command itself, or the
+                // whole group when it closed just before. Without this a setup like
+                // `(sleep 25; touch x) &` is indistinguishable from waiting 25
+                // seconds, and every such line looks like the mistake it is not.
+                if (found == "&") {
+                    const std::size_t from =
+                        closed_group == static_cast<std::size_t>(-1)
+                            ? (commands.empty() ? 0 : commands.size() - 1)
+                            : closed_group;
+                    for (std::size_t n = from; n < commands.size(); ++n)
+                        commands[n].background = true;
+                }
+                closed_group = static_cast<std::size_t>(-1);
             } else {
                 pending_redirection = found;
             }
@@ -6173,6 +6208,7 @@ void register_shell_parsing(Interpreter& interpreter) {
             if (!command.redirections.empty())
                 record.field("redirections", Value::list(command.redirections));
             if (!command.connector.empty()) record.field("connector", command.connector);
+            if (command.background) record.field("background", true);
             records.push_back(record.build());
         }
         std::vector<Value> bodies;
