@@ -174,6 +174,20 @@ because it cannot fire until the agent has already written the loop.
 So put the note in `~/.codex/AGENTS.md` or `~/.claude/CLAUDE.md` first. The hook is
 for where those cannot be edited.
 
+Once the note is in the agent's own instructions, a `SessionStart` hook carrying
+the same text is not a second safeguard, it is the same sentence charged to the
+context twice. The configuration this repository recommends and runs:
+
+| | instructions | hooks |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `PreToolUse`, `PostToolUse`, `PostToolUseFailure` |
+| Codex | `~/.codex/AGENTS.md` | `PreToolUse` |
+
+Claude Code keeps `PostToolUse` because its transcripts record no per-call timing
+and pairing the two events is the only way to get a duration. Codex does not need
+it: its rollouts already carry a timestamp and a call id on every record, so a
+second hook would be writing down what has already been written.
+
 ## Advice
 
 `TOOLSCHEME_STEER=1` lets the hook add a note to the model's context without
@@ -235,6 +249,20 @@ because it cannot fire until the agent has already written the loop.
 
 So put the note in `~/.codex/AGENTS.md` or `~/.claude/CLAUDE.md` first. The hook is
 for where those cannot be edited.
+
+Once the note is in the agent's own instructions, a `SessionStart` hook carrying
+the same text is not a second safeguard, it is the same sentence charged to the
+context twice. The configuration this repository recommends and runs:
+
+| | instructions | hooks |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `PreToolUse`, `PostToolUse`, `PostToolUseFailure` |
+| Codex | `~/.codex/AGENTS.md` | `PreToolUse` |
+
+Claude Code keeps `PostToolUse` because its transcripts record no per-call timing
+and pairing the two events is the only way to get a duration. Codex does not need
+it: its rollouts already carry a timestamp and a call id on every record, so a
+second hook would be writing down what has already been written.
 
 ## Advice has to be actionable
 
