@@ -5,7 +5,7 @@ SANFLAGS = -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefin
 SOURCES = toolscheme.cpp toolscheme_posix.cpp
 HEADERS = toolscheme.hpp toolscheme_posix.hpp
 
-.PHONY: all test sanitize fuzz bench loop synthesize check install uninstall clean
+.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall clean
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
@@ -155,6 +155,12 @@ uninstall:
 	rm -f "$(BINDIR)/toolscheme"
 	rm -rf "$(SHAREDIR)"
 	@echo "removed the binary and $(SHAREDIR); observations in $(STATEDIR) are left alone"
+
+# Did the instruction land? Claude Code does not record its loaded instructions in
+# the transcript, so this is judged by behaviour instead: a session that waits
+# without polling and without being advised is one that read the note.
+adoption: toolscheme
+	@./toolscheme tests/adoption-report.scm --root "$(STATEDIR)" --lib "$(CURDIR)/lib"
 
 clean:
 	rm -f toolscheme toolscheme_test toolscheme_test_san toolscheme_fuzz toolscheme_bench

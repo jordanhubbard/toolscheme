@@ -188,6 +188,28 @@ and pairing the two events is the only way to get a duration. Codex does not nee
 it: its rollouts already carry a timestamp and a call id on every record, so a
 second hook would be writing down what has already been written.
 
+### Checking that it landed
+
+Claude Code does not record its loaded instructions in the transcript, so whether
+`CLAUDE.md` was read cannot be inspected directly. It can be judged by behaviour,
+which is what the 2x2 measured:
+
+```sh
+make adoption
+```
+
+| verdict | meaning |
+|---|---|
+| `instruction-working` | used the tool, never polled, was never advised -- the note did its job |
+| `corrected-after-polling` | polled, was advised, then used the tool -- the hook is carrying it, the note did not load |
+| `polled-uncorrected` | neither channel reached this session |
+| `waited-without-polling` | waited some other way; no complaint, no evidence either |
+| `nothing-to-judge` | the session never waited for anything |
+
+Instructions are read at session start, so a session already running when the note
+was added will show `corrected-after-polling` at best. That is the expected result,
+not a failure.
+
 ## Advice
 
 `TOOLSCHEME_STEER=1` lets the hook add a note to the model's context without
@@ -263,6 +285,28 @@ Claude Code keeps `PostToolUse` because its transcripts record no per-call timin
 and pairing the two events is the only way to get a duration. Codex does not need
 it: its rollouts already carry a timestamp and a call id on every record, so a
 second hook would be writing down what has already been written.
+
+### Checking that it landed
+
+Claude Code does not record its loaded instructions in the transcript, so whether
+`CLAUDE.md` was read cannot be inspected directly. It can be judged by behaviour,
+which is what the 2x2 measured:
+
+```sh
+make adoption
+```
+
+| verdict | meaning |
+|---|---|
+| `instruction-working` | used the tool, never polled, was never advised -- the note did its job |
+| `corrected-after-polling` | polled, was advised, then used the tool -- the hook is carrying it, the note did not load |
+| `polled-uncorrected` | neither channel reached this session |
+| `waited-without-polling` | waited some other way; no complaint, no evidence either |
+| `nothing-to-judge` | the session never waited for anything |
+
+Instructions are read at session start, so a session already running when the note
+was added will show `corrected-after-polling` at best. That is the expected result,
+not a failure.
 
 ## Advice has to be actionable
 
