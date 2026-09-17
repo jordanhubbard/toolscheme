@@ -37,6 +37,11 @@ struct Policy {
     bool allow_service = false;
     bool allow_logging = false;
     bool allow_desktop = false;
+
+    // How long `wait-for` may block when the caller names no deadline of its own,
+    // and the ceiling it may never exceed however long the caller asks for.
+    std::int64_t default_wait_ms = 60000;
+    std::int64_t max_wait_ms = 3600000;
 };
 
 std::shared_ptr<FileSystemCapability> make_filesystem(const Policy& policy);
@@ -50,6 +55,7 @@ std::shared_ptr<ShellCapability> make_shell(const Policy& policy,
 std::shared_ptr<ServiceCapability> make_service(const Policy& policy,
                                                 std::shared_ptr<ProcessCapability> processes);
 std::shared_ptr<LoggingCapability> make_logging(const Policy& policy);
+std::shared_ptr<WatchCapability> make_watch(const Policy& policy);
 std::shared_ptr<DesktopCapability> make_desktop(const Policy& policy,
                                                 std::shared_ptr<ProcessCapability> processes);
 std::shared_ptr<HttpCapability> make_http(const Policy& policy,

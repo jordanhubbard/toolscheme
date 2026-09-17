@@ -17,6 +17,9 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <poll.h>
+#if defined(__linux__)
+#include <sys/inotify.h>
+#endif
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -2778,6 +2781,278 @@ std::shared_ptr<HttpCapability> make_http(const Policy& policy,
     return std::make_shared<PosixHttp>(policy, std::move(backend));
 }
 
+
+// ---------------------------------------------------------------------------
+// Waiting for something to happen
+// ---------------------------------------------------------------------------
+//
+// The measured reason this exists: across 30 Codex sessions, 17.7% of all tool
+// time -- 9.3 hours of 52.8 -- went to `sleep`, and the four most repeated
+// invocations in the entire corpus were identical sleeps of 45 to 60 seconds.
+// Beside them sat 1,318 calls writing an empty string to an interactive session
+// to find out whether it had finished. That is a fixed guess standing in for an
+// event.
+//
+// Two mechanisms, deliberately: inotify makes this *responsive*, and polling makes
+// it *correct*. Events can be missed -- a queue overflows, a path is replaced
+// rather than modified, a filesystem does not report at all -- so the predicate is
+// re-evaluated on a bounded backoff regardless. Neither is trusted alone.
+class PosixWatch final : public WatchCapability {
+public:
+    explicit PosixWatch(const Policy& policy) : policy_(policy) {}
+
+    bool supports(std::string_view operation) const override { return operation == "wait-for"; }
+
+    Value invoke(Interpreter& vm, std::string_view operation,
+                 const std::vector<Value>& arguments) override {
+        (void)vm;
+        if (operation != "wait-for")
+            return unsupported_result(std::string(operation), "unknown watch operation");
+        if (arguments.empty())
+            return error_result("wait-for needs a condition", "invalid-argument", "wait-for");
+
+        const Value condition = arguments[0];
+        const Value options = options_at(arguments, 1);
+        std::string kind;
+        std::vector<std::string> parts;
+        if (!read_condition(condition, kind, parts))
+            return error_result("a condition is (changed PATH...), (exists PATH), "
+                                "(missing PATH) or (matches PATH TEXT)",
+                                "invalid-argument", "wait-for");
+
+        std::int64_t budget = number_option(options, "timeout-ms", policy_.default_wait_ms);
+        if (budget < 0) budget = 0;
+        if (budget > policy_.max_wait_ms) budget = policy_.max_wait_ms;
+
+        // Paths are resolved through the policy exactly as every other filesystem
+        // operation is; waiting on a path is no reason to see outside the root.
+        std::vector<std::string> paths;
+        const std::size_t path_count = (kind == "matches") ? 1 : parts.size();
+        for (std::size_t i = 0; i < path_count; ++i) {
+            const Resolved resolved = resolve(parts[i], false);
+            if (!resolved.ok) return reject(resolved, "wait-for", parts[i]);
+            paths.push_back(resolved.path);
+        }
+        if (paths.empty())
+            return error_result("wait-for needs at least one path", "invalid-argument", "wait-for");
+        const std::string needle = (kind == "matches" && parts.size() > 1) ? parts[1] : std::string();
+
+        const auto started = std::chrono::steady_clock::now();
+        const auto elapsed_ms = [&started] {
+            return static_cast<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started).count());
+        };
+
+        Watcher watcher(paths);
+        std::string matched;
+        for (;;) {
+            if (satisfied(kind, paths, needle, matched))
+                return report(true, kind, matched, elapsed_ms(), "satisfied");
+            const std::int64_t left = budget - elapsed_ms();
+            if (left <= 0) return report(false, kind, "", elapsed_ms(), "timeout");
+            // Bounded so a missed event costs a quarter second, not the whole wait.
+            watcher.wait(std::min<std::int64_t>(left, 250));
+        }
+    }
+
+private:
+    // Paths are watched through their parent directory as well as directly, because
+    // a file that is created, renamed over, or deleted produces no event on itself.
+    struct Watcher {
+        int fd = -1;
+        explicit Watcher(const std::vector<std::string>& paths) {
+#if defined(__linux__)
+            fd = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+            if (fd < 0) return;
+            const unsigned mask = IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_TO |
+                                  IN_MOVED_FROM | IN_CLOSE_WRITE | IN_ATTRIB | IN_DELETE_SELF;
+            for (const std::string& path : paths) {
+                ::inotify_add_watch(fd, path.c_str(), mask);
+                const std::size_t slash = path.find_last_of('/');
+                const std::string parent = slash == std::string::npos ? "." : path.substr(0, slash);
+                if (!parent.empty()) ::inotify_add_watch(fd, parent.c_str(), mask);
+            }
+#else
+            (void)paths;
+#endif
+        }
+        ~Watcher() { if (fd >= 0) ::close(fd); }
+        Watcher(const Watcher&) = delete;
+        Watcher& operator=(const Watcher&) = delete;
+
+        // Sleeps until an event arrives or the slice expires. Without inotify this
+        // is simply the sleep, which is what every other platform gets until it has
+        // an adapter of its own.
+        void wait(std::int64_t slice_ms) {
+            if (fd < 0) {
+                struct timespec pause;
+                pause.tv_sec = static_cast<time_t>(slice_ms / 1000);
+                pause.tv_nsec = static_cast<long>((slice_ms % 1000) * 1000000L);
+                ::nanosleep(&pause, nullptr);
+                return;
+            }
+            struct pollfd entry;
+            entry.fd = fd;
+            entry.events = POLLIN;
+            entry.revents = 0;
+            if (::poll(&entry, 1, static_cast<int>(slice_ms)) > 0) {
+                char buffer[4096];
+                while (::read(fd, buffer, sizeof buffer) > 0) {}
+            }
+        }
+    };
+
+    static bool read_condition(const Value& condition, std::string& kind,
+                               std::vector<std::string>& parts) {
+        if (!condition.is_list() || condition.is_nil()) return false;
+        const Value head = condition.car();
+        if (head.type() != Value::Type::Symbol) return false;
+        kind = std::string(head.as_symbol());
+        if (kind != "changed" && kind != "exists" && kind != "missing" && kind != "matches")
+            return false;
+        for (Value rest = condition.cdr(); !rest.is_nil(); rest = rest.cdr()) {
+            const Value item = rest.car();
+            if (item.type() != Value::Type::String) return false;
+            parts.push_back(std::string(item.as_string()));
+        }
+        return !parts.empty() && (kind != "matches" || parts.size() == 2);
+    }
+
+    // A change is judged by the identity and size of the file, not by its
+    // modification time alone: a build that rewrites a file within the same second
+    // leaves mtime untouched on filesystems with coarse timestamps.
+    struct Fingerprint {
+        bool present = false;
+        dev_t device = 0;
+        ino_t inode = 0;
+        off_t size = 0;
+        struct timespec modified {};
+        bool operator!=(const Fingerprint& other) const {
+            return present != other.present || device != other.device ||
+                   inode != other.inode || size != other.size ||
+                   modified.tv_sec != other.modified.tv_sec ||
+                   modified.tv_nsec != other.modified.tv_nsec;
+        }
+    };
+
+    static Fingerprint fingerprint(const std::string& path) {
+        Fingerprint print;
+        struct stat info;
+        if (::lstat(path.c_str(), &info) != 0) return print;
+        print.present = true;
+        print.device = info.st_dev;
+        print.inode = info.st_ino;
+        print.size = info.st_size;
+#if defined(__APPLE__)
+        print.modified = info.st_mtimespec;
+#else
+        print.modified = info.st_mtim;
+#endif
+        return print;
+    }
+
+    bool satisfied(const std::string& kind, const std::vector<std::string>& paths,
+                   const std::string& needle, std::string& matched) {
+        if (kind == "changed") {
+            if (baseline_.empty())
+                for (const std::string& path : paths) baseline_.push_back(fingerprint(path));
+            for (std::size_t i = 0; i < paths.size(); ++i) {
+                if (fingerprint(paths[i]) != baseline_[i]) { matched = paths[i]; return true; }
+            }
+            return false;
+        }
+        if (kind == "exists" || kind == "missing") {
+            const bool want = (kind == "exists");
+            for (const std::string& path : paths) {
+                if (fingerprint(path).present == want) { matched = path; return true; }
+            }
+            return false;
+        }
+        // matches: the pattern may arrive in a file that does not exist yet, and the
+        // file may be large, so this reads with the same bound as everything else
+        // rather than pulling an unbounded log into memory on every poll.
+        const int descriptor = ::open(paths[0].c_str(), O_RDONLY | O_CLOEXEC);
+        if (descriptor < 0) return false;
+        std::string text;
+        char buffer[65536];
+        for (;;) {
+            const ssize_t got = ::read(descriptor, buffer, sizeof buffer);
+            if (got <= 0) break;
+            text.append(buffer, static_cast<std::size_t>(got));
+            if (text.size() > policy_.output_limit) break;
+        }
+        ::close(descriptor);
+        if (text.find(needle) == std::string::npos) return false;
+        matched = paths[0];
+        return true;
+    }
+
+    Value report(bool ok, const std::string& kind, const std::string& path,
+                 std::int64_t waited, const char* reason) {
+        std::vector<Value> fields;
+        fields.push_back(field("satisfied", ok));
+        fields.push_back(symbol_field("condition", kind));
+        if (!path.empty()) fields.push_back(field("path", relative(path)));
+        fields.push_back(symbol_field("reason", reason));
+        // Volatile by the usual rule: how long the wait took is host churn, and two
+        // identical calls must still read identically unless it is asked for.
+        fields.push_back(field("elapsed-ms", waited));
+        return ok_result(std::move(fields));
+    }
+
+    Policy policy_;
+    std::vector<Fingerprint> baseline_;
+
+    // The same containment rules the filesystem capability applies, using the same
+    // helpers: normalize lexically, refuse anything outside the root, then resolve
+    // the parent for real so a symlink cannot walk out. The final component is left
+    // alone because waiting on a path that does not exist yet is the point.
+    struct Resolved { bool ok = false; std::string path; std::string reason; std::string code; };
+
+    Resolved resolve(const std::string& raw, bool) const {
+        Resolved out;
+        if (raw.empty()) { out.reason = "empty path"; out.code = "invalid-path"; return out; }
+        if (raw.find('\0') != std::string::npos) {
+            out.reason = "path contains an embedded NUL";
+            out.code = "invalid-path";
+            return out;
+        }
+        const std::string lexical = normalize(raw[0] == '/' ? raw : policy_.root + "/" + raw);
+        if (!inside(policy_.root, lexical)) {
+            out.reason = "path escapes the capability root";
+            out.code = "outside-root";
+            return out;
+        }
+        const std::size_t slash = lexical.find_last_of('/');
+        const std::string parent = slash == 0 ? "/" : lexical.substr(0, slash);
+        char real[PATH_MAX];
+        if (::realpath(parent.c_str(), real) != nullptr && !inside(policy_.root, real)) {
+            out.reason = "path escapes the capability root through a symbolic link";
+            out.code = "outside-root";
+            return out;
+        }
+        out.ok = true;
+        out.path = lexical;
+        return out;
+    }
+
+    Value reject(const Resolved& resolved, const char* operation, const std::string& path) const {
+        return error_result(resolved.reason, resolved.code, operation, {field("path", path)});
+    }
+
+    std::string relative(const std::string& full) const {
+        if (full == policy_.root) return ".";
+        if (inside(policy_.root, full) && policy_.root != "/")
+            return full.substr(policy_.root.size() + 1);
+        return full;
+    }
+};
+
+std::shared_ptr<WatchCapability> make_watch(const Policy& policy) {
+    return std::make_shared<PosixWatch>(policy);
+}
+
 void install_all(Interpreter& interpreter, const Policy& policy) {
     interpreter.install("filesystem", make_filesystem(policy));
     const std::shared_ptr<ProcessCapability> processes = make_process(policy);
@@ -2791,6 +3066,7 @@ void install_all(Interpreter& interpreter, const Policy& policy) {
     interpreter.install("logging", make_logging(policy));
     interpreter.install("desktop", make_desktop(policy, processes));
     interpreter.install("http", make_http(policy, processes));
+    interpreter.install("watch", make_watch(policy));
     // Pure groups need no host capability at all.
     interpreter.enable_text_primitives();
     interpreter.enable_group(PrimitiveGroup::Json);

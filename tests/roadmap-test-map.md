@@ -18,6 +18,7 @@ Every roadmap task must add or update a named test before it can close. Test nam
 | 27 | One success and one applicable failure example per registered primitive |
 | 28 | Same-runtime and cross-interpreter `read`/`write`/`eval` round trips |
 | m0 | Path-mode text tools, working directory, find predicates, sed, stability, git front end |
+| m2 | `wait-for`: an already-true condition returns at once, an unmet one times out distinguishably, elapsed time obeys the volatility rule, watched paths cannot escape the sandbox, and the primitive is absent without the capability |
 | m1 | `shell-parse` heredoc/quoting/keyword handling, `platform-facts`, telemetry accounting, published-tool registry |
 
 ## Loop coverage (`make loop`)

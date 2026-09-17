@@ -140,6 +140,35 @@ cannot be made without being counted.
 
 A structured failure counts as a call with an error, not as a missing call.
 
+## Waiting
+
+`wait-for` blocks until a condition holds, instead of guessing how long something
+will take:
+
+```scheme
+(wait-for '(exists "build/output"))
+(wait-for '(changed "src/main.c" "src/util.c") '((timeout-ms 30000)))
+(wait-for '(missing "build.lock"))
+(wait-for '(matches "server.log" "Listening on"))
+```
+
+```scheme
+; => ((satisfied #t) (condition exists) (path "build/output") (reason satisfied))
+; => ((satisfied #f) (condition exists) (reason timeout))
+```
+
+`satisfied` and `reason` distinguish the two outcomes, so a caller never has to
+infer a timeout from a missing field. `elapsed-ms` is volatile and therefore
+omitted unless `(volatile #t)` asks for it -- a wait that reported its own duration
+by default could never appear twice in a prompt without invalidating the cache.
+
+Two mechanisms back it, deliberately. inotify makes it responsive; re-evaluating
+the condition on a bounded backoff makes it correct, because events can be missed
+when a queue overflows, a path is replaced rather than modified, or a filesystem
+does not report at all. Platforms without inotify get the polling alone, which is
+still an answer within a quarter second rather than a fixed guess. Watched paths
+resolve inside the sandbox root like every other path.
+
 ## Standard input
 
 `--stdin` binds the process's standard input to `standard-input` as a string.

@@ -5821,6 +5821,9 @@ const std::vector<GroupEntry>& group_table() {
         {PrimitiveGroup::Process, ProcessCapability::kind, "timeout", nullptr},
         {PrimitiveGroup::Process, ProcessCapability::kind, "wait4path", nullptr},
 
+        // Waiting for something to happen rather than guessing how long it takes
+        {PrimitiveGroup::Watch, WatchCapability::kind, "wait-for", nullptr},
+
         // Clock
         {PrimitiveGroup::Clock, ClockCapability::kind, "date", nullptr},
         {PrimitiveGroup::Clock, ClockCapability::kind, "sleep", nullptr},

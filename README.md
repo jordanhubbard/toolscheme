@@ -171,6 +171,19 @@ unreadable path becomes a record, not an aborted call.
 return records, not porcelain text. Full shells, `awk`, compilers, and package
 managers stay delegated to a shell or process capability.
 
+## Waiting for an event
+
+```scheme
+(wait-for '(exists "build/output"))
+(wait-for '(matches "server.log" "Listening on") '((timeout-ms 30000)))
+```
+
+Measured across 30 Codex sessions, 17.7% of all tool time -- 9.3 hours of 52.8 --
+went to `sleep`, and the four most repeated invocations in the corpus were
+identical sleeps of 45 to 60 seconds. `wait-for` returns when the thing actually
+happens: against a build that finishes in 3 s, it returned in 3.00 s where the
+55 s sleep it replaces would have cost 52 s more.
+
 ## Stable output
 
 Results are stable by default: host metadata that churns between otherwise

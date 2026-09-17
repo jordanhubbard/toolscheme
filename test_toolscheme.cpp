@@ -256,6 +256,7 @@ void install_test_capabilities(Interpreter& vm) {
     vm.install("system", toolscheme::posix::make_system(policy));
     vm.install("crypto", toolscheme::posix::make_crypto());
     vm.install("shell", toolscheme::posix::make_shell(policy, processes));
+    vm.install("watch", toolscheme::posix::make_watch(policy));
     for (const char* kind : {"terminal", "service", "logging", "desktop", "archive",
                              "compression", "network", "http", "remote-shell", "editor"})
         vm.install(kind, std::make_shared<StubCapability>(kind));
@@ -1397,6 +1398,60 @@ static void milestone_1_published_tools(Interpreter& vm) {
                "m1 a tool without a name is refused");
 }
 
+static void milestone_2_wait_for(Interpreter& vm) {
+    // Why this exists: across 30 Codex sessions 17.7% of all tool time went to
+    // `sleep`, and the four most repeated invocations in the corpus were identical
+    // sleeps of 45 to 60 seconds. A fixed guess standing in for an event.
+
+    // A condition already true returns at once rather than serving out a budget.
+    const Value immediate = vm.eval("(wait-for '(exists \"a.txt\") '((timeout-ms 5000)))");
+    check(toolscheme::option(immediate, "satisfied").as_boolean(),
+          "m2 an already-true condition is satisfied immediately");
+    check(toolscheme::option(immediate, "reason").as_symbol() == "satisfied",
+          "m2 satisfaction is reported as such");
+
+    // A condition that never holds costs its budget and says why, rather than
+    // failing in a way a caller has to guess at.
+    const Value expired = vm.eval("(wait-for '(exists \"no-such-file\") '((timeout-ms 60)))");
+    check(!toolscheme::option(expired, "satisfied").as_boolean(),
+          "m2 an unmet condition is reported unsatisfied");
+    check(toolscheme::option(expired, "reason").as_symbol() == "timeout",
+          "m2 a timeout is distinguishable from satisfaction");
+
+    // `missing` is not merely the negation of a stale read: a.txt is there, so the
+    // condition must not be reported as met.
+    check(!toolscheme::option(vm.eval("(wait-for '(missing \"a.txt\") '((timeout-ms 60)))"),
+                              "satisfied").as_boolean(),
+          "m2 a present file does not satisfy `missing`");
+    check(toolscheme::option(vm.eval("(wait-for '(missing \"no-such-file\") '((timeout-ms 60)))"),
+                             "satisfied").as_boolean(),
+          "m2 an absent file satisfies `missing`");
+
+    // How long the wait took is host churn, so it obeys the same rule as every
+    // other volatile field: absent unless asked for. Without that a wait could
+    // never appear twice in a prompt without invalidating the cache.
+    check(toolscheme::option(vm.eval("(wait-for '(exists \"a.txt\") '((timeout-ms 50)))"),
+                             "elapsed-ms").type() == Value::Type::Unspecified,
+          "m2 elapsed time is omitted by default");
+    check(toolscheme::option(vm.eval("(wait-for '(exists \"a.txt\") "
+                                     "'((timeout-ms 50) (volatile #t)))"),
+                             "elapsed-ms").type() == Value::Type::Integer,
+          "m2 elapsed time is available on request");
+
+    // Waiting on a path is no reason to see outside the root.
+    error_code(vm, "(wait-for '(exists \"../../etc/passwd\") '((timeout-ms 50)))",
+               "outside-root", "m2 a watched path may not escape the sandbox");
+    error_code(vm, "(wait-for '(nonsense \"x\"))", "invalid-argument",
+               "m2 an unknown condition is refused");
+    error_code(vm, "(wait-for '(matches \"a.txt\"))", "invalid-argument",
+               "m2 `matches` needs both a path and a pattern");
+
+    // The primitive exists only where something backs it.
+    Interpreter files_only;
+    files_only.install("filesystem", toolscheme::posix::make_filesystem(test_policy()));
+    check(!files_only.has_primitive("wait-for"), "m2 wait-for needs the watch capability");
+}
+
 // ---------------------------------------------------------------------------
 // Registry completeness (roadmap item 27)
 // ---------------------------------------------------------------------------
@@ -1520,6 +1575,7 @@ int main() {
     milestone_1_platform_facts(vm);
     milestone_1_telemetry(vm);
     milestone_1_published_tools(vm);
+    milestone_2_wait_for(vm);
     registry_completeness(vm);
 
     remove_fixture();

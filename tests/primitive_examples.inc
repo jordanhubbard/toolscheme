@@ -314,6 +314,7 @@
 {"unzip", "(unzip '((archive \"x.zip\")))", "(unzip clock)"},
 {"uptime", "(uptime)", "(uptime crypto)"},
 {"users", "(users)", "(users clock)"},
+{"wait-for", "(wait-for '(exists \"a.txt\") '((timeout-ms 100)))", "(wait-for '(nonsense))"},
 {"wait4path", "(wait4path \"a.txt\" '((timeout-ms 50)))", "(wait4path)"},
 {"wc", "(wc TEXT)", "(wc 1)"},
 {"whereis", "(whereis \"sh\")", "(whereis \"no-such-program-anywhere\")"},

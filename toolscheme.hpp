@@ -209,6 +209,7 @@ TOOLSCHEME_CAPABILITY(HttpCapability, "http");
 TOOLSCHEME_CAPABILITY(RemoteShellCapability, "remote-shell");
 TOOLSCHEME_CAPABILITY(EditorCapability, "editor");
 TOOLSCHEME_CAPABILITY(LoggingCapability, "logging");
+TOOLSCHEME_CAPABILITY(WatchCapability, "watch");
 TOOLSCHEME_CAPABILITY(DesktopCapability, "desktop");
 
 #undef TOOLSCHEME_CAPABILITY
@@ -220,7 +221,8 @@ TOOLSCHEME_CAPABILITY(DesktopCapability, "desktop");
 enum class PrimitiveGroup {
     Core, Text, Diff, Json, Encoding, Output, Path, File, Repository,
     Process, System, Terminal, Clock, Service, Archive, Compression,
-    Crypto, Network, Http, RemoteShell, Editor, Shell, Desktop, Logging, Vcs
+    Crypto, Network, Http, RemoteShell, Editor, Shell, Desktop, Logging, Vcs,
+    Watch
 };
 
 class Interpreter {
