@@ -140,9 +140,19 @@
          (at (codex-call-time payload)))
     (cond
       ;; Code mode: the shell arrives wrapped in JavaScript.
+      ;; Not every code-mode call runs a command. `tools.write_stdin(...)` feeds an
+      ;; interactive session that is already running, and `apply_patch` edits files,
+      ;; so there is no `cmd` to find. Recording those as an empty command collapses
+      ;; more than a thousand distinct calls onto one invocation key and reports
+      ;; them as the single most repeated invocation in the corpus, which is an
+      ;; artefact rather than a finding.
       ((string=? kind "custom_tool_call")
-       (let ((input (field-ref payload "input" "")))
-         (list (event 'tool-call name (list (list "command" (hook-command-of input)))
+       (let* ((input (field-ref payload "input" ""))
+              (command (hook-command-of input)))
+         (list (event 'tool-call name
+                      (if (string-null? command)
+                          (list (list "summary" (clip-text input 300)))
+                          (list (list "command" command)))
                       0 0 0 (hook-workdir-of input "") call at))))
       ((string=? kind "function_call")
        (let* ((raw (field-ref payload "arguments" ""))
@@ -233,6 +243,9 @@
 ;; opening quote), returning (text next-index) or #f. Escapes are honoured because
 ;; a command containing \" would otherwise terminate the value early and truncate
 ;; whatever followed.
+(define (clip-text text limit)
+  (if (<= (string-length text) limit) text (substring text 1 limit)))
+
 (define (js-string-at text from)
   (if (or (> from (string-length text)) (not (char=? (string-ref text from) #\")))
       #f

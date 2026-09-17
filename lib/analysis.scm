@@ -71,12 +71,19 @@
 
 ;; Consecutive pairs are fusion candidates: two calls that always follow one
 ;; another are one call the toolbox does not yet offer.
+;; Accumulating rather than building on the way out, because the recursive call in
+;; `(cons x (adjacent-pairs ...))` is not in tail position: it holds a frame per
+;; element, and a corpus of thirteen thousand calls exhausted the stack and killed
+;; the process. The interpreter guarantees tail calls, which is exactly why the one
+;; call that is not a tail call is easy to write by accident.
 (define (adjacent-pairs calls)
-  (if (or (null? calls) (null? (cdr calls)))
-      '()
-      (cons (string-append (field-ref (car calls) 'tool "") " -> "
-                           (field-ref (cadr calls) 'tool ""))
-            (adjacent-pairs (cdr calls)))))
+  (let loop ((rest calls) (out '()))
+    (if (or (null? rest) (null? (cdr rest)))
+        (reverse out)
+        (loop (cdr rest)
+              (cons (string-append (field-ref (car rest) 'tool "") " -> "
+                                   (field-ref (cadr rest) 'tool ""))
+                    out)))))
 
 ;; Only live observation can report how long a tool took: a transcript records no
 ;; per-call timestamp and no way to pair a call with its result. Where the data is

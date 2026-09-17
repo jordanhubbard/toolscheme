@@ -100,6 +100,20 @@
 ;; directories.
 (define nested-call (car (field-ref nested 'events)))
 
+;; A corpus of 13,000 calls used to kill the process outright: `adjacent-pairs`
+;; recursed inside a `cons`, so the call was not in tail position and it held one
+;; stack frame per call. The interpreter guarantees tail calls, which is exactly
+;; what makes the one call that is not a tail call easy to write by accident, so
+;; the analysis stages that walk a whole corpus are exercised at a size no stack
+;; would survive if it were done wrong again.
+(define deep-calls
+  (let loop ((i 20000) (out '()))
+    (if (= i 0) out (loop (- i 1) (cons (list (list 'tool "bash")) out)))))
+
+(define deep-survives
+  (and (= (length (adjacent-pairs deep-calls)) 19999)
+       (= (length (take deep-calls 19999)) 19999)))
+
 (define checks
   (list (list 'flat-calls (field-ref flat 'calls))
         (list 'working-directory (field-ref nested-call 'directory ""))
@@ -109,6 +123,7 @@
         (list 'cache-visible (field-ref (field-ref both 'cache) 'available))
         (list 'cache-created (field-ref (field-ref both 'cache) 'cache-created-tokens 0))
         (list 'result-bytes-counted (> (field-ref both 'result-bytes) 0))
+        (list 'large-corpus-survives deep-survives)
         (list 'agents-separated (field-ref mixed 'agents))
         (list 'duplicate-events-collapsed (field-ref duplicated 'count))
         (list 'order-preserved deduped-commands)
@@ -137,4 +152,5 @@
                  (= (field-ref duplicated 'count) 3)
                  (equal? deduped-commands '("grep -n x f" "wc -l f"))
                  (= (agent-calls mixed "codex") 1)
-                 (= (agent-calls mixed "claude-code") 1))))
+                 (= (agent-calls mixed "claude-code") 1)
+                 deep-survives)))

@@ -11,10 +11,14 @@
 (define (count-if predicate items)
   (fold-left (lambda (n item) (if (predicate item) (+ n 1) n)) 0 items))
 
+;; Accumulating rather than building on the way out: `(cons x (take ...))` holds a
+;; frame per element, which is fine for the small n this is usually called with and
+;; not fine for any other. The same shape crashed the analyzer once already.
 (define (take items n)
-  (if (or (= n 0) (null? items))
-      '()
-      (cons (car items) (take (cdr items) (- n 1)))))
+  (let loop ((rest items) (left n) (out '()))
+    (if (or (= left 0) (null? rest))
+        (reverse out)
+        (loop (cdr rest) (- left 1) (cons (car rest) out)))))
 
 (define (flatten lists)
   (fold-right append '() lists))

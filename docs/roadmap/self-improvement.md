@@ -239,6 +239,51 @@ steering, because deciding what to tell a session on the basis of what other
 sessions have already done means having that history in memory rather than
 re-reading a growing log on every tool call.
 
+## What the corpora say
+
+Both agents, analyzed after the loop could finally read them at full size.
+
+| | Claude Code | Codex |
+|---|---|---|
+| tool calls | 7,097 (158 sessions) | 13,131 (30 sessions) |
+| result bytes | 127 MB | 40 MB |
+| **bytes per call** | **18 KB** | **3 KB** |
+| busiest shape | `head -20` (274) | `sed -n` (3,215) |
+| redundant calls | 541 | 2,149 |
+| tool time | not recorded | **52.8 hours** |
+
+The two waste different things. Claude Code wastes volume -- six times the bytes
+per call, one file read sixty-three times. Codex wastes time.
+
+And where Codex's time goes is the most useful number in this project so far:
+
+| tool | time | share |
+|---|---:|---:|
+| `exec` | 42.2 h | 80.0% |
+| **`sleep`** | **9.3 h** | **17.7%** |
+| `send_message` | 0.9 h | 1.7% |
+
+Nearly a fifth of all tool time is spent sleeping, and the most repeated
+invocations in the entire corpus are identical sleeps: 55 s x 221, 45 s x 123,
+50 s x 98, 60 s x 92. Roughly eight hours in the top four alone, in fixed
+increments. Beside them sit 1,318 `tools.write_stdin` calls with `"chars":""` --
+writing nothing to an interactive session to see whether it has finished.
+
+That is polling, and it is the largest single opportunity measured anywhere in this
+work. **A wait-for-condition primitive** -- block until a file changes, a process
+exits, a port opens, a pattern appears -- replaces a 55-second guess with an event.
+
+It is also the right *kind* of tool, which matters more than the size of the win.
+Reproducing a shell command byte for byte leaves speed as the only axis and loses
+to a mature C tool; waiting on an event reproduces nothing and changes the shape of
+the interaction, which is where every real win in this data lives. Filesystem
+watching pays for itself here rather than as a read cache, where it would be
+competing with the page cache for microseconds.
+
+`sed -n` at 3,215 is the other candidate worth taking seriously: Codex reads file
+ranges through `sed` where Claude Code has a native read tool, and a ranged read is
+not a tight scanning loop we would lose.
+
 ## Open
 
 - **A cost-only win is not yet distinguishable from a correctness win.** The gate
