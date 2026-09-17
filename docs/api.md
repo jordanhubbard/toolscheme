@@ -169,6 +169,31 @@ does not report at all. Platforms without inotify get the polling alone, which i
 still an answer within a quarter second rather than a fixed guess. Watched paths
 resolve inside the sandbox root like every other path.
 
+### Waiting on a running process
+
+`wait-for` watches paths. A process that is not meant to exit needs a different
+question, and `process-wait` cannot ask it:
+
+```scheme
+(process-expect job "Listening on" '((timeout-ms 30000)))
+(process-expect job "error:" '((stream errors)))
+```
+
+```scheme
+; => ((satisfied #t) (reason matched) (stream output) (finished #f))
+; => ((satisfied #f) (reason exited) (finished #t) (exit-status 3))
+; => ((satisfied #f) (reason timeout) (finished #f))
+```
+
+It blocks on the pipe, so the process writing is what wakes it. A process that
+exits without ever printing the pattern ends the wait immediately rather than
+serving out the deadline, and `reason` separates that from a timeout.
+
+Only output arriving after the call is examined. A pattern left in the buffer by an
+earlier exchange would otherwise satisfy the next wait instantly, and an expect loop
+that matches its own history never advances; `(include-existing #t)` asks for the
+older behaviour deliberately.
+
 ## Standard input
 
 `--stdin` binds the process's standard input to `standard-input` as a string.

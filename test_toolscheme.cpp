@@ -1452,6 +1452,54 @@ static void milestone_2_wait_for(Interpreter& vm) {
     check(!files_only.has_primitive("wait-for"), "m2 wait-for needs the watch capability");
 }
 
+static void milestone_2_process_expect(Interpreter& vm) {
+    // The other half of the sleeping: 1,318 calls in the Codex corpus wrote an
+    // empty string to an interactive session purely to read back what had
+    // accumulated and see whether it was finished. `process-wait` cannot serve
+    // that, because the process is not meant to exit.
+
+    // The pattern arrives, and the process is still running -- which is the whole
+    // distinction from waiting for exit.
+    const Value matched = vm.eval(
+        "(with-job (lambda (j) (process-expect j \"hi\" "
+        "'((timeout-ms 4000) (include-existing #t)))))");
+    check(toolscheme::option(matched, "satisfied").as_boolean(),
+          "m2 process-expect is satisfied by matching output");
+    check(toolscheme::option(matched, "reason").as_symbol() == "matched",
+          "m2 a match is reported as a match");
+
+    // A process that ends without ever printing it ends the wait, rather than
+    // running the deadline out on something that can no longer happen.
+    const Value gone = vm.eval(
+        "(with-job (lambda (j) (process-expect j \"never-printed\" '((timeout-ms 9000)))))");
+    check(!toolscheme::option(gone, "satisfied").as_boolean(),
+          "m2 an exited process does not satisfy the pattern");
+    check(toolscheme::option(gone, "reason").as_symbol() == "exited",
+          "m2 exiting is distinguishable from timing out");
+    check(toolscheme::option(gone, "exit-status").type() == Value::Type::Integer,
+          "m2 the exit status is reported when the process ends");
+
+    // Output from an earlier exchange must not satisfy a later wait: an expect loop
+    // that matches its own history never advances. This is the one behaviour a
+    // naive polling loop gets right by accident and a buffered reader gets wrong.
+    const Value stale = vm.eval(
+        "(with-job (lambda (j) "
+        "  (process-expect j \"hi\" '((timeout-ms 4000) (include-existing #t))) "
+        "  (process-expect j \"hi\" '((timeout-ms 150)))))");
+    check(toolscheme::option(stale, "reason").as_symbol() != "matched",
+          "m2 output already consumed does not satisfy the next wait");
+
+    error_code(vm, "(with-job (lambda (j) (process-expect j \"x\" '((stream nonsense)))))",
+               "invalid-argument", "m2 an unknown stream is refused");
+    error_code(vm, "(with-job (lambda (j) (process-expect j)))", "invalid-argument",
+               "m2 process-expect needs a pattern");
+
+    Interpreter files_only;
+    files_only.install("filesystem", toolscheme::posix::make_filesystem(test_policy()));
+    check(!files_only.has_primitive("process-expect"),
+          "m2 process-expect needs the process capability");
+}
+
 // ---------------------------------------------------------------------------
 // Registry completeness (roadmap item 27)
 // ---------------------------------------------------------------------------
@@ -1576,6 +1624,7 @@ int main() {
     milestone_1_telemetry(vm);
     milestone_1_published_tools(vm);
     milestone_2_wait_for(vm);
+    milestone_2_process_expect(vm);
     registry_completeness(vm);
 
     remove_fixture();

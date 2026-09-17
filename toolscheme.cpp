@@ -5800,6 +5800,7 @@ const std::vector<GroupEntry>& group_table() {
         {PrimitiveGroup::Process, ProcessCapability::kind, "process-start", nullptr},
         {PrimitiveGroup::Process, ProcessCapability::kind, "process-poll", nullptr},
         {PrimitiveGroup::Process, ProcessCapability::kind, "process-wait", nullptr},
+        {PrimitiveGroup::Process, ProcessCapability::kind, "process-expect", nullptr},
         {PrimitiveGroup::Process, ProcessCapability::kind, "process-cancel", nullptr},
         {PrimitiveGroup::Process, ProcessCapability::kind, "process-write", nullptr},
         {PrimitiveGroup::Process, ProcessCapability::kind, "process-close-input", nullptr},

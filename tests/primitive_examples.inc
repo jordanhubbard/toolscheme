@@ -215,6 +215,7 @@
 {"process-read-errors", "(with-job (lambda (j) (process-read-errors j)))", "(process-read-errors 5)"},
 {"process-read-output", "(with-job (lambda (j) (process-read-output j)))", "(process-read-output 5)"},
 {"process-start", "(with-job (lambda (j) (handle-describe j)))", "(process-start '((program \"no-such-program-anywhere\")))"},
+{"process-expect", "(with-job (lambda (j) (process-expect j \"hi\" '((timeout-ms 2000) (include-existing #t)))))", "(process-expect 5 \"hi\")"},
 {"process-wait", "(with-job (lambda (j) (process-wait j)))", "(process-wait 5)"},
 {"process-write", "(with-open-job (lambda (j) (process-write j \"x\")))", "(process-write 5 \"x\")"},
 {"ps", "(ps '((limit 4)))", "(ps clock)"},

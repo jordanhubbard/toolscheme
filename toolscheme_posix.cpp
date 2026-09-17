@@ -1646,7 +1646,8 @@ public:
             return true;
         }
         static const std::set<std::string_view> known = {
-            "process-start", "process-poll", "process-wait", "process-cancel", "process-write",
+            "process-start", "process-poll", "process-wait", "process-expect",
+            "process-cancel", "process-write",
             "process-close-input", "process-read-output", "process-read-errors", "job-poll",
             "job-wait", "job-cancel", "job-input", "job-close-input", "job-output",
             "job-error-output", "job-status", "ps", "pgrep", "pkill", "kill", "nice", "timeout",
@@ -1673,6 +1674,7 @@ public:
         if (op == "process-cancel" || op == "job-cancel") return run_cancel(vm, arguments);
         if (op == "process-write" || op == "job-input") return run_write(vm, arguments);
         if (op == "process-close-input" || op == "job-close-input") return run_close_input(vm, arguments);
+        if (op == "process-expect" || op == "job-expect") return run_expect(vm, arguments);
         if (op == "process-read-output" || op == "job-output") return run_read(vm, arguments, false);
         if (op == "process-read-errors" || op == "job-error-output") return run_read(vm, arguments, true);
         return unsupported_result(operation, "the POSIX process adapter does not implement " + op);
@@ -2008,6 +2010,122 @@ private:
         if (!job) return error_result("job handle is not live", "invalid-handle", "job-close-input");
         if (job->input >= 0) { ::close(job->input); job->input = -1; }
         return ok_result({field("closed", true)});
+    }
+
+    // Waiting for a running process to say something, rather than asking it
+    // repeatedly whether it has.
+    //
+    // The measured shape: 1,318 calls in the Codex corpus wrote an empty string to
+    // an interactive session purely to read back whatever had accumulated and see
+    // whether it was done. `process-wait` cannot serve that -- the process is not
+    // meant to exit -- so the only tool available was a poll.
+    //
+    // This blocks on the pipe itself. The process writing is what wakes it, so the
+    // answer arrives when the output does, and a process that exits without ever
+    // printing the pattern ends the wait rather than running it out to the deadline.
+    Value run_expect(Interpreter& vm, const std::vector<Value>& arguments) {
+        // A caller mistake is invalid-argument, not host-error: the host did nothing
+        // wrong and nothing about the environment would make a retry work.
+        if (arguments.size() < 2)
+            return error_result("process-expect expects a job handle and a pattern",
+                                "invalid-argument", "process-expect");
+        std::shared_ptr<Job> job = job_of(vm, arguments[0]);
+        if (!job) return error_result("job handle is not live", "invalid-handle", "process-expect");
+        if (arguments[1].type() != Value::Type::String)
+            return error_result("process-expect needs a pattern string", "invalid-argument",
+                                "process-expect");
+        const std::string needle(arguments[1].as_string());
+        const Value options = options_at(arguments, 2);
+
+        // Which stream to watch. A prompt usually arrives on stdout and a failure on
+        // stderr, and a caller waiting for either should not have to guess.
+        const std::string stream = string_option(options, "stream", "output");
+        if (stream != "output" && stream != "errors" && stream != "both")
+            return error_result("stream is output, errors or both", "invalid-argument",
+                                "process-expect");
+
+        std::int64_t budget = number_option(options, "timeout-ms", policy_.default_wait_ms);
+        if (budget < 0) budget = 0;
+        if (budget > policy_.max_wait_ms) budget = policy_.max_wait_ms;
+
+        // Only what arrives from here on is examined by default: a pattern already
+        // sitting in the buffer from an earlier exchange would otherwise satisfy the
+        // wait instantly, which is precisely the bug a polling loop does not have.
+        drain(job);
+        const bool from_start = flag_option(options, "include-existing");
+        const std::size_t out_from = from_start ? 0 : job->out.size();
+        const std::size_t err_from = from_start ? 0 : job->err.size();
+
+        const auto started = std::chrono::steady_clock::now();
+        const auto elapsed = [&started] {
+            return static_cast<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - started).count());
+        };
+        const auto seen = [&]() -> const char* {
+            if (stream != "errors" && job->out.size() > out_from &&
+                job->out.find(needle, out_from) != std::string::npos)
+                return "output";
+            if (stream != "output" && job->err.size() > err_from &&
+                job->err.find(needle, err_from) != std::string::npos)
+                return "errors";
+            return nullptr;
+        };
+
+        for (;;) {
+            drain(job);
+            if (const char* where = seen())
+                return expectation(true, "matched", where, job, elapsed());
+            reap(job, false);
+            if (job->finished) {
+                drain(job);
+                if (const char* where = seen())
+                    return expectation(true, "matched", where, job, elapsed());
+                return expectation(false, "exited", nullptr, job, elapsed());
+            }
+            const std::int64_t left = budget - elapsed();
+            if (left <= 0) return expectation(false, "timeout", nullptr, job, elapsed());
+
+            // Blocking on the pipes is the whole point: the process writing is what
+            // wakes this, not a timer. The slice only bounds how long a process that
+            // exits silently goes unnoticed.
+            struct pollfd watched[2];
+            nfds_t count = 0;
+            if (job->output >= 0 && stream != "errors") {
+                watched[count].fd = job->output;
+                watched[count].events = POLLIN;
+                watched[count].revents = 0;
+                ++count;
+            }
+            if (job->errors >= 0 && stream != "output") {
+                watched[count].fd = job->errors;
+                watched[count].events = POLLIN;
+                watched[count].revents = 0;
+                ++count;
+            }
+            const int slice = static_cast<int>(std::min<std::int64_t>(left, 200));
+            if (count == 0) {
+                struct timespec pause;
+                pause.tv_sec = slice / 1000;
+                pause.tv_nsec = static_cast<long>((slice % 1000) * 1000000L);
+                ::nanosleep(&pause, nullptr);
+            } else {
+                ::poll(watched, count, slice);
+            }
+        }
+    }
+
+    Value expectation(bool ok, const char* reason, const char* stream,
+                      const std::shared_ptr<Job>& job, std::int64_t waited) {
+        std::vector<Value> fields;
+        fields.push_back(field("satisfied", ok));
+        fields.push_back(symbol_field("reason", reason));
+        if (stream != nullptr) fields.push_back(symbol_field("stream", stream));
+        fields.push_back(field("finished", job->finished));
+        if (job->finished)
+            fields.push_back(field("exit-status", static_cast<std::int64_t>(job->exit_status)));
+        fields.push_back(field("elapsed-ms", waited));
+        return ok_result(std::move(fields));
     }
 
     Value run_read(Interpreter& vm, const std::vector<Value>& arguments, bool errors) {

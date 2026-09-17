@@ -184,6 +184,17 @@ identical sleeps of 45 to 60 seconds. `wait-for` returns when the thing actually
 happens: against a build that finishes in 3 s, it returned in 3.00 s where the
 55 s sleep it replaces would have cost 52 s more.
 
+`process-expect` asks the same question of a process that is not meant to exit:
+
+```scheme
+(process-expect job "Listening on" '((timeout-ms 30000)))
+```
+
+It blocks on the pipe rather than polling, and a process that exits without ever
+printing the pattern ends the wait instead of serving out the deadline. This is the
+other half of the measured waste: 1,318 calls in the corpus wrote an empty string
+to an interactive session purely to see whether it had finished yet.
+
 ## Stable output
 
 Results are stable by default: host metadata that churns between otherwise
