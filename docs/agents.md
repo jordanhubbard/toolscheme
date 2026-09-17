@@ -204,6 +204,23 @@ default without editing anything. `TOOLSCHEME_REDIRECT` is read the same way.
 Verified against a live Codex session with `TOOLSCHEME_STEER` explicitly unset in
 its environment: the advice still arrived.
 
+### Advice has to be actionable
+
+Naming a tool is not enough. The first version of the sleep note said toolscheme
+"has `wait-for`" without saying how to reach it, and reaching it turned out not to
+work: an installed binary could not find its own library, because `locate_library`
+looked beside the executable and in `../lib` but not in `../share/toolscheme/lib`,
+and `wait-for` rejected every path it was given because it used the policy root raw
+where `.` is not an absolute path and fails every containment check. Both were
+invisible until the tool was invoked the way an agent would invoke it, with no
+flags, from an unrelated directory.
+
+The note now gives a command that runs:
+
+```
+toolscheme -e '(wait-for (quote (exists "some/path")))'
+```
+
 ## Keeping the installation current
 
 The hook runs the *installed* copy, not the checkout. After changing anything under

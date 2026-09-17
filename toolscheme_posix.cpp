@@ -2917,7 +2917,15 @@ std::shared_ptr<HttpCapability> make_http(const Policy& policy,
 // re-evaluated on a bounded backoff regardless. Neither is trusted alone.
 class PosixWatch final : public WatchCapability {
 public:
-    explicit PosixWatch(const Policy& policy) : policy_(policy) {}
+    // The root is resolved once, exactly as the filesystem capability resolves it.
+    // Using policy.root raw looks harmless and is not: the default is ".", which is
+    // not an absolute path, so every containment check fails and the capability
+    // rejects every path it is ever given.
+    explicit PosixWatch(const Policy& policy) : policy_(policy) {
+        std::string resolved = real_or_empty(policy.root);
+        if (resolved.empty()) resolved = normalize(policy.root);
+        policy_.root = resolved;
+    }
 
     bool supports(std::string_view operation) const override { return operation == "wait-for"; }
 

@@ -116,12 +116,17 @@
             (= (count-key keys "ADVISED-SLEEP" "") 0))
        (list (list 'kind "ADVISED-SLEEP")
              (list 'text
+                   ;; Naming the tool is not enough: advice the agent cannot act on
+                   ;; is noise in a context window, which is the thing this project
+                   ;; exists to stop wasting. So it gives the command to run.
                    (string-append
                      "This waits a fixed " (number->string (quotient slept 1000))
                      "s whether or not the thing you are waiting for has happened. "
-                     "toolscheme has `(wait-for '(exists PATH))`, `(wait-for '(matches PATH TEXT))` "
-                     "and `(process-expect JOB TEXT)`, which return the moment it does "
-                     "and report whether it happened or the deadline expired."))))
+                     "`toolscheme` is on PATH and returns the moment it does:\n"
+                     "  toolscheme -e '(wait-for (quote (exists \"some/path\")))'\n"
+                     "  toolscheme -e '(wait-for (quote (matches \"some.log\" \"ready\")))'\n"
+                     "It reports whether the condition was met or the deadline expired, "
+                     "and takes (timeout-ms N)."))))
       ;; Said every time, because it names a specific call and stays true.
       ((> (count-key keys key call) 0)
        (list (list 'kind #f)

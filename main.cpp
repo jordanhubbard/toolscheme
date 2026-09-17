@@ -85,8 +85,13 @@ std::string locate_library(const std::string& explicit_path) {
     if (!self.empty()) {
         const std::size_t slash = self.find_last_of('/');
         if (slash != std::string::npos) {
-            candidates.push_back(self.substr(0, slash) + "/lib");
-            candidates.push_back(self.substr(0, slash) + "/../lib");
+            const std::string bin = self.substr(0, slash);
+            candidates.push_back(bin + "/lib");              // a source checkout
+            candidates.push_back(bin + "/../lib");
+            // An installed tree: the binary is in $PREFIX/bin and the library is in
+            // $PREFIX/share/toolscheme/lib, so neither of the above finds it and
+            // the interpreter starts with no library and only says so in a warning.
+            candidates.push_back(bin + "/../share/toolscheme/lib");
         }
     }
     for (const std::string& candidate : candidates)
