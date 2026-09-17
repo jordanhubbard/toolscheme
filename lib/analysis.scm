@@ -10,7 +10,22 @@
 ;; Every agent runs shells through a differently named tool -- Bash, exec,
 ;; local_shell -- and Codex wraps the command in JavaScript besides. What makes a
 ;; call a shell call is that a command can be read out of it, not what it is named.
-(define (bash-command input) (hook-command-of input))
+;;
+;; The exception is a payload that merely *has* a field called `command`. Codex's
+;; apply_patch keeps the patch there, and shell-parsing a diff invents commands
+;; called `+` and `***`; in the live corpus those two together claimed nearly ten
+;; thousand calls that never happened and headed the ranking. New records are
+;; filtered where the tool name is known, but records already written are not, so
+;; the analysis refuses them here as well.
+(define (patch-payload? text)
+  (or (string-prefix? "*** Begin Patch" text)
+      (string-prefix? "*** Update File" text)
+      (string-prefix? "--- " text)
+      (string-prefix? "+++ " text)))
+
+(define (bash-command input)
+  (let ((command (hook-command-of input)))
+    (if (patch-payload? (string-trim command)) "" command)))
 
 ;; A command's shape is its program plus its sorted flags: the invariant part
 ;; that identifies the pattern, with paths and patterns stripped out.

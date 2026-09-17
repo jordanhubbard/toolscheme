@@ -16,10 +16,35 @@
 (define hook-command-limit 2000)
 (define hook-input-limit 600)
 
+;; Strings here are native bytes, so cutting at a byte offset can slice a
+;; multi-byte character in half and leave a JSON string no strict reader will
+;; accept -- a box-drawing `-` in a command truncated after its first byte was
+;; enough to make the log undecodable. A continuation byte is 10xxxxxx, so backing
+;; up while the next byte is one lands on a character boundary.
+(define (utf8-boundary text limit)
+  (let loop ((n limit))
+    (cond ((<= n 0) 0)
+          ((>= n (string-length text)) (string-length text))
+          (else
+            (let ((next (char->integer (string-ref text (+ n 1)))))
+              (if (and (>= next 128) (< next 192)) (loop (- n 1)) n))))))
+
+;; Which tools actually run a shell. Both agents call it Bash; Codex code mode
+;; wraps it in JavaScript and names the tool `exec`. Everything else that happens
+;; to have a `command` field is something else wearing the same word.
+(define (shell-tool? name input)
+  (let ((lower (string-downcase name)))
+    (or (string-contains? lower "bash")
+        (string-contains? lower "shell")
+        (string=? lower "exec")
+        (string=? lower "exec_command")
+        (and (string? input) (string-contains? input "tools.exec_command(")))))
+
 (define (clip text limit)
   (if (<= (string-length text) limit)
       text
-      (string-append (substring text 1 limit) "...")))
+      (let ((cut (utf8-boundary text limit)))
+        (if (<= cut 0) "..." (string-append (substring text 1 cut) "...")))))
 
 ;; The log lives in the state directory, which is the sandbox root the hook runs
 ;; under -- so the path is a bare filename and the hook has write access to that
@@ -48,7 +73,13 @@
          (finished (or (string=? event "PostToolUse")
                        (string=? event "PostToolUseFailure")))
          (input (field-ref request "tool_input" '()))
-         (command (let ((c (field-ref input "command" #f))) (if (string? c) c "")))
+         ;; A `command` field does not make something a shell command. Codex's
+         ;; apply_patch carries the patch under that name, and shell-parsing a diff
+         ;; invents commands called `+` and `***` -- which between them topped the
+         ;; live corpus's ranking with nearly ten thousand calls that never happened.
+         (command (if (shell-tool? (field-ref request "tool_name" "") input)
+                      (hook-command-of input)
+                      ""))
          (response (field-ref request "tool_response" #f)))
     (list (list "source" "toolscheme-hook")
           ;; Which agent this came from. `turn_id` is Codex's own documented

@@ -338,6 +338,49 @@ This corrects the conclusion drawn from the contaminated run, which was that the
 per-call advice added nothing measurable. Against a clean control it takes adoption
 from 0 of 3 to 3 of 3. What it cannot do is get there first.
 
+## Storage and deployment
+
+Not yet built; recorded here with what the running system now knows about its own
+access patterns, because those decide the answer.
+
+The log is 33 MB after a day and a half -- roughly 22 MB a day, 650 MB a month --
+and a full analytical pass over 86,000 records already takes 24 seconds. That is
+not a crisis and it is the wrong shape to keep scanning.
+
+Two access patterns, and they pull in opposite directions:
+
+- **Capture**: one tiny append per hook invocation, from several concurrent
+  sessions, inside a 2.5 ms budget on every tool call an agent makes.
+- **Analysis**: whole-corpus aggregation -- group, sort, count -- over everything
+  ever collected.
+
+The second wants a columnar store. The first wants nothing at all.
+
+**The capture path must not depend on a database being up.** A hook that needs a
+connection turns a database outage into a failure on every tool call in every
+session on the machine, and the one rule this hook has is that it must never break
+the session it is measuring. An `O_APPEND` write to a file is crash-safe, needs no
+coordination between sessions, and cannot fail in a way that matters. So the file
+stays as the write-ahead capture, and a database becomes the *analysis* store,
+loaded from it rather than written to directly.
+
+That split also decides what can be containerized. The hook cannot be: it is
+invoked by the agent, on the host, and has to be quick and always present. What
+containerizes cleanly is everything downstream -- the analyzer, the MCP server, the
+store -- which is also the part worth deploying with Helm and sharing between
+machines.
+
+For the store itself, the access pattern points at a column store with real JSON
+support. **DuckDB** fits the local case exactly: embedded, no server, reads JSONL
+directly, and would take that 24-second pass to well under a second with nothing to
+deploy. **Postgres with JSONB**, or **ClickHouse** at volume, fits the service case
+where several machines report into one place.
+
+The cost to weigh is that this project has no external dependencies at all, which
+is why `md5`, `sha1`, `sha256` and the diff are in-tree. A database client would be
+the first, and it should be optional at build time the way the HTTP adapter is --
+`toolscheme` itself must keep working, and keep collecting, with nothing installed.
+
 ## Open
 
 - **A cost-only win is not yet distinguishable from a correctness win.** The gate
