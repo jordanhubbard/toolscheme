@@ -158,6 +158,40 @@ This showed up by reading the log after the first live Codex rewrite, where the
 `pre` record held `grep -n define-tool ...` and the `post` record held the
 substitution.
 
+## Advice
+
+`TOOLSCHEME_STEER=1` lets the hook add a note to the model's context without
+touching the call. Two things trigger it, both from the measured corpus:
+
+- **A fixed wait of ten seconds or more.** 9.3 hours of 52.8 went to `sleep`, in
+  identical 45-to-60 second increments. The note names `wait-for` and
+  `process-expect`. Said once per session -- repeating it every call would cost
+  more context than the advice saves.
+- **An invocation already made in this session.** 541 redundant calls for Claude
+  Code, 2,149 for Codex, one file read sixty-three times. Said every time, because
+  it names a specific call and stays true.
+
+Verified reaching a live Codex session: asked to quote the guidance it received,
+the model reported "condition-based waits can finish as soon as a condition is
+met".
+
+The bar for advice is different in kind from the bar for a rewrite. A rewrite has
+to be proven byte-identical because the agent cannot see that it happened. Advice
+changes nothing about what the call returns, so it cannot be wrong about the
+answer -- only about whether it was worth the context it cost. Which makes staying
+quiet the property worth getting right, and most of what is tested.
+
+Advice alone carries no `permissionDecision`: Codex rejects `allow` unless a
+rewrite accompanies it, and adding one would turn a note into a permission grant
+the hook never meant to make.
+
+## Keeping the installation current
+
+The hook runs the *installed* copy, not the checkout. After changing anything under
+`lib/` or `hooks/`, run `make install` again or the hook will keep running the old
+code -- silently, because a hook that cannot find a feature simply does not use it.
+Steering appeared to do nothing on its first live test for exactly this reason.
+
 ## What the hook does not do yet
 
 The hook writes; it does not read. Steering a session from what other sessions

@@ -129,10 +129,42 @@
   (if (redirect-enabled?) (redirect-rewrite request) #f))
 
 
-;; The hook's whole job in one call: record what happened, and -- only for a
-;; PreToolUse event, only when asked, and only for a command entirely covered by
-;; proven evidence -- hand back the rewrite. Anything else returns the empty
-;; string, which is the hook saying nothing at all.
+;; The hook's whole job in one call: record what happened, offer advice when there
+;; is any worth giving, and -- only for PreToolUse, only when asked, and only for a
+;; command entirely covered by proven evidence -- hand back a rewrite.
+;;
+;; The two are combined carefully because the agents disagree about what is legal.
+;; Codex rejects `permissionDecision: allow` on its own and rejects `updatedInput`
+;; without it, so a rewrite carries the decision and advice alone carries none.
+;; Claude Code accepts both shapes.
+;; Advice on its own carries no permissionDecision: Codex rejects `allow` unless a
+;; rewrite accompanies it, and adding one here would turn a note into a permission
+;; grant the hook never meant to make.
+(define (advice-only-decision text)
+  (list (list "hookSpecificOutput"
+              (list (list "hookEventName" "PreToolUse")
+                    (list "additionalContext" text)))))
+
+(define (decision-with-advice rewrite text)
+  (list (list "hookSpecificOutput"
+              (append (field-ref rewrite "hookSpecificOutput")
+                      (list (list "additionalContext" text))))))
+
+(define (hook-decision request)
+  (let* ((rewrite (catch-errors
+                    (lambda ()
+                      (if (equal? (field-ref request "hook_event_name" "") "PreToolUse")
+                          (redirect-decision request)
+                          #f))))
+         (advice (catch-errors (lambda () (steer-advice request))))
+         (rewriting (and (not (error? rewrite)) rewrite))
+         (advising (and (not (error? advice)) (string? advice) advice)))
+    (cond
+      ((and (not rewriting) (not advising)) #f)
+      ((not rewriting) (advice-only-decision advising))
+      ((not advising) rewriting)
+      (else (decision-with-advice rewriting advising)))))
+
 (define (hook-run)
   (let ((request (catch-errors (lambda () (hook-request)))))
     (if (error? request)
@@ -140,12 +172,7 @@
         (begin
           (catch-errors
             (lambda () (if (null? request) #f (hook-append (hook-observation request)))))
-          (let ((decision
-                  (catch-errors
-                    (lambda ()
-                      (if (equal? (field-ref request "hook_event_name" "") "PreToolUse")
-                          (redirect-decision request)
-                          #f)))))
+          (let ((decision (catch-errors (lambda () (hook-decision request)))))
             (if (or (error? decision) (not decision))
                 ""
                 (field-ref (json-write decision) 'text)))))))
