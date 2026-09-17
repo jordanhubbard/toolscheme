@@ -158,6 +158,22 @@ This showed up by reading the log after the first live Codex rewrite, where the
 `pre` record held `grep -n define-tool ...` and the `post` record held the
 substitution.
 
+## Telling the agent, and where
+
+Measured across a 2x2 of three trials each: left to itself the agent polls, in
+every trial. A one-line note in the agent's own instructions removes the behaviour
+entirely; the per-call hook advice corrects it only after the first occurrence,
+because it cannot fire until the agent has already written the loop.
+
+| | adopted the tool | polled in a loop |
+|---|---|---|
+| neither | 0/3 | 3/3 |
+| hook only | 3/3 | 3/3 |
+| note only | 3/3 | **0/3** |
+
+So put the note in `~/.codex/AGENTS.md` or `~/.claude/CLAUDE.md` first. The hook is
+for where those cannot be edited.
+
 ## Advice
 
 `TOOLSCHEME_STEER=1` lets the hook add a note to the model's context without
@@ -204,7 +220,23 @@ default without editing anything. `TOOLSCHEME_REDIRECT` is read the same way.
 Verified against a live Codex session with `TOOLSCHEME_STEER` explicitly unset in
 its environment: the advice still arrived.
 
-### Advice has to be actionable
+### Telling the agent, and where
+
+Measured across a 2x2 of three trials each: left to itself the agent polls, in
+every trial. A one-line note in the agent's own instructions removes the behaviour
+entirely; the per-call hook advice corrects it only after the first occurrence,
+because it cannot fire until the agent has already written the loop.
+
+| | adopted the tool | polled in a loop |
+|---|---|---|
+| neither | 0/3 | 3/3 |
+| hook only | 3/3 | 3/3 |
+| note only | 3/3 | **0/3** |
+
+So put the note in `~/.codex/AGENTS.md` or `~/.claude/CLAUDE.md` first. The hook is
+for where those cannot be edited.
+
+## Advice has to be actionable
 
 Naming a tool is not enough. The first version of the sleep note said toolscheme
 "has `wait-for`" without saying how to reach it, and reaching it turned out not to

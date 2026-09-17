@@ -308,16 +308,35 @@ Three attempts, each of which failed in a way worth keeping:
    instruction also lives in `AGENTS.md`, which every session loads whatever the
    flag says.
 
-The third failure is the interesting one, and it answers the question the corpus
-could not. Agents ran `toolscheme -e '(wait-for (quote (exists "ONE")))'` **without
-any per-call advice at all**. A one-line instruction in a file the agent already
-reads, plus a tool that works when invoked plainly, was enough. The reactive hook
-advice added nothing measurable on this task.
+The third failure invalidated the comparison, so it was run again with each arm in
+its own `CODEX_HOME`: two channels crossed, three trials each.
 
-That is six trials of one task and not a general law. But it points the opposite
-way from where this work has been heading: the expensive machinery -- per-call
-advice, rewriting, proving equivalence -- may be worth far less than making the
-tool reachable and saying so once, in the place the agent already looks.
+| | delivered | adopted the tool | polled in a loop |
+|---|---|---|---|
+| neither | 0/3 | 0/3 | **3/3** |
+| hook only | 3/3 | 3/3 | **3/3** |
+| note only | 0/3 | 3/3 | **0/3** |
+| both | 0/3 | 3/3 | **0/3** |
+
+Left alone, the agent polls. Every trial, identically:
+`(sleep 25; touch ONE) & while [ ! -e ONE ]; do sleep 1; done`. The tool existing
+and being on PATH changes nothing on its own -- nobody reaches for what they have
+not been told about.
+
+Either channel fixes the adoption. Only one fixes the behaviour. The hook is
+reactive: it fires once the agent has already written the polling loop, so the
+loop still runs and only the *second* wait improves -- which is why the hook arm
+adopts in 3 of 3 and still polls in 3 of 3. The note is preventive: with it there,
+the agent never writes the loop at all, the hook has nothing to correct, and its
+advice is never delivered.
+
+So the note dominates: it removes the behaviour rather than correcting it, costs
+nothing per call, and needs no hook trust. The hook earns its place only where the
+agent's instructions cannot be edited -- and there it demonstrably works.
+
+This corrects the conclusion drawn from the contaminated run, which was that the
+per-call advice added nothing measurable. Against a clean control it takes adoption
+from 0 of 3 to 3 of 3. What it cannot do is get there first.
 
 ## Open
 
