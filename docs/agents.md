@@ -325,6 +325,44 @@ The note now gives a command that runs:
 toolscheme -e '(wait-for (quote (exists "some/path")))'
 ```
 
+## Continuing without waiting
+
+Off unless switched on, in the state directory's `config`:
+
+```
+TOOLSCHEME_CONTINUE=1        # decline the stop when the agent named its next step
+TOOLSCHEME_CONTINUE_MAX=3    # consecutive continuations before it stops anyway
+```
+
+Claude Code only; Codex has no `Stop` hook to decline.
+
+Measured across 30 Codex sessions: 34.5 hours idle waiting for a person, 10.1 of
+them in gaps short enough to be worth recovering, against 2.7 hours asleep on a
+timer. But the obvious use of that is not what the data supports. Of 141 such
+stalls, **2** ended with a question or an offer to proceed; the other 139 ended
+with a completion summary that named the next step and stopped anyway. So this does
+not approve decisions on anyone's behalf. It declines to stop when the agent has
+already said what it would do next.
+
+It refuses in every other case:
+
+| the agent's last message | result |
+|---|---|
+| names a next step, asks nothing | continues |
+| asks a question | stops |
+| names a next step *and* asks a question | **stops** -- the question wins |
+| a plain sign-off with no next step | stops |
+| empty | stops |
+| already continued `TOOLSCHEME_CONTINUE_MAX` times | stops |
+
+The third row is the one that matters. Answering a question on the user's behalf is
+the failure that would make this indefensible, so a question overrides every other
+signal.
+
+This is the most dangerous feature here, because an agent that does not stop has no
+natural place left to check its own work. The cap exists so a loop ends by
+arithmetic rather than by someone noticing.
+
 ## Keeping the installation current
 
 The hook runs the *installed* copy, not the checkout. After changing anything under

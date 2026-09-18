@@ -110,7 +110,7 @@ bool load_library(Interpreter& vm, const std::string& directory, std::string& er
     // Order matters: later files build on earlier ones.
     static const char* files[] = {"prelude.scm", "agentlog.scm", "analysis.scm",
                                   "replay.scm", "synthesis.scm", "mcp.scm", "hooks.scm",
-                                  "redirect.scm", "steer.scm"};
+                                  "redirect.scm", "steer.scm", "continue.scm"};
     for (const char* name : files) {
         const std::string path = directory + "/" + name;
         std::ifstream input(path, std::ios::binary);
