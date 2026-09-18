@@ -29,6 +29,23 @@
 
 ;; A command's shape is its program plus its sorted flags: the invariant part
 ;; that identifies the pattern, with paths and patterns stripped out.
+;; Shapes and programs both come from one parse. They used to call `shell-parse`
+;; separately on the same text, which doubled the dominant cost of the whole
+;; analysis: parsing 19,711 real commands -- 9 MB, averaging 456 bytes each -- takes
+;; 34 seconds, and doing it twice takes 68.
+(define (parsed-shapes parsed)
+  (map (lambda (command)
+         (let ((flags (field-ref command 'flags '())))
+           (string-append (field-ref command 'name "")
+                          (if (null? flags) "" " ")
+                          (string-join (list-sort flags) " "))))
+       (field-ref parsed 'commands)))
+
+(define (command-facts text)
+  (let ((parsed (shell-parse text)))
+    (list (list 'shapes (parsed-shapes parsed))
+          (list 'programs (field-ref parsed 'programs)))))
+
 (define (command-shapes text)
   (let ((parsed (shell-parse text)))
     (map (lambda (command)
@@ -139,10 +156,12 @@
          (bash (filter (lambda (c) (not (string-null?
                                           (bash-command (field-ref c 'input '())))))
                        calls))
-         (commands (flatten (map (lambda (c) (command-shapes (bash-command (field-ref c 'input '()))))
-                                 bash)))
-         (programs (flatten (map (lambda (c) (programs-in (bash-command (field-ref c 'input '()))))
-                                 bash)))
+         ;; One parse per call, both answers taken from it. Parsing the same text
+         ;; twice doubled the dominant cost of the analysis: 19,711 real commands
+         ;; are 9 MB and take 34 seconds to parse once.
+         (facts (map (lambda (c) (command-facts (bash-command (field-ref c 'input '())))) bash))
+         (commands (flatten (map (lambda (f) (field-ref f 'shapes)) facts)))
+         (programs (flatten (map (lambda (f) (field-ref f 'programs)) facts)))
          (bytes (fold-left (lambda (n e) (+ n (field-ref e 'result-bytes 0))) 0 events)))
     (list (list 'events (length events))
           (list 'tool-calls (length calls))

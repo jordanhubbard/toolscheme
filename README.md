@@ -47,6 +47,10 @@ agent configuration to add; it writes none of it for you.
 
 ## Attaching to an agent
 
+`docs/operating.md` is the full account: installing, interposing on one or more
+agents, what is collected and where, and how far it reaches (one machine; no
+agent-to-agent protocol).
+
 A `PreToolUse` / `PostToolUse` hook records every tool call as it happens: the
 command, the directory it ran in, and -- joining the two events by call id -- how
 long it took and how many bytes came back. Claude Code and Codex send the same
