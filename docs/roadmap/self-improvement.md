@@ -381,6 +381,51 @@ is why `md5`, `sha1`, `sha256` and the diff are in-tree. A database client would
 the first, and it should be optional at build time the way the HTTP adapter is --
 `toolscheme` itself must keep working, and keep collecting, with nothing installed.
 
+## Bounding a read, and what it cost
+
+The premise held where the agent was naive and nowhere else. Against a disciplined
+use of Unix tools -- grep for line numbers, then ranged reads -- a structured result
+is byte-neutral: 8,111 against 7,899 on one query. Against the naive pattern it is
+not close: 680 KB against 8 KB for the same question.
+
+Claude Code is the naive one. Asked a question about two documents it issued two
+whole-file reads, 25,786 bytes, to answer in eighty words. Bounding those reads to
+120 lines -- substitution through `updatedInput`, not advice -- returned 4,907
+bytes, **81% fewer**, and both answers were substantively the same.
+
+Two honest limits on that. The answer happened to be near the top of both files; a
+question about line 400 would have been damaged, and a bare `Read(path)` carries no
+statement of what is wanted, so nothing downstream can bound it except by guessing
+that the answer comes early. And it is one trial. The mechanism is what the earlier
+experiment predicted: told to *prefer* a tool, an agent adds it and carries on;
+substitution is the only thing that removes a step.
+
+## Where the time actually goes
+
+Under a throughput objective rather than a token one, the ranking changes
+completely. Across 30 Codex sessions:
+
+| | hours |
+|---|---:|
+| idle, waiting for a human | **34.5** |
+| of which in recoverable-length gaps (1--60 min) | 10.1 |
+| sleeping on a fixed timer | 2.7 |
+
+Idle time is twelve times the sleeping problem that `wait-for` was built for.
+
+But the tempting reading of that is wrong, and the data says so. Of 141
+recoverable-length stalls, **2** ended with a question or an offer to proceed. The
+other 139 ended with a completion summary. The agent was not blocked awaiting a
+rubber stamp; it had finished and was waiting for the next instruction. Auto-
+approving obvious choices would recover two stalls, not a hundred and forty.
+
+What those summaries do contain is the next step, named by the agent itself: "Full
+borrow task718 remains open. Next required slice: nested resource projections with
+place identity and overlap tracking." That is not a decision needing approval. It
+is an agent that knows what to do next and stops anyway, which is a far larger
+target -- and a far more dangerous one, since an agent that never stops is an agent
+with no natural place to check its own work.
+
 ## Open
 
 - **A cost-only win is not yet distinguishable from a correctness win.** The gate

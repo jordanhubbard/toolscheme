@@ -156,13 +156,43 @@
                     (list (list "hookEventName" "SessionStart")
                           (list "additionalContext" note)))))))
 
+;; Bounding a read the agent asked to make whole.
+;;
+;; This is substitution rather than advice, which is the only mechanism measured to
+;; remove a step: told to "prefer" a tool, an agent adds it and carries on. The cost
+;; is that a bare read carries no statement of what is wanted -- by the time the
+;; agent issues Read(path), the pattern it searched for is gone -- so nothing
+;; downstream can bound it except by guessing that the answer comes early. That
+;; guess is the whole experiment; it is not a safe default and is off unless asked
+;; for.
+(define (read-bound) (let ((n (setting "TOOLSCHEME_READ_LIMIT")))
+                       (if (string? n) (string->number n) #f)))
+
+(define (bound-read-decision request)
+  (let* ((input (field-ref request "tool_input" '()))
+         (path (field-ref input "file_path" #f))
+         (limit (read-bound)))
+    (if (or (not limit)
+            (not (string=? (field-ref request "tool_name" "") "Read"))
+            (not (string? path))
+            ;; Only an unbounded read: one the agent already bounded is its own.
+            (not (absent? (field-ref input "limit" #f)))
+            (not (absent? (field-ref input "offset" #f))))
+        #f
+        (list (list "hookSpecificOutput"
+                    (list (list "hookEventName" "PreToolUse")
+                          (list "permissionDecision" "allow")
+                          (list "updatedInput"
+                                (append input (list (list "limit" limit))))))))))
+
 (define (hook-decision request)
   (if (equal? (field-ref request "hook_event_name" "") "SessionStart")
       (session-decision request)
       (tool-decision request)))
 
 (define (tool-decision request)
-  (let* ((rewrite (catch-errors
+  (let* ((bounded (catch-errors (lambda () (bound-read-decision request))))
+         (rewrite (catch-errors
                     (lambda ()
                       (if (equal? (field-ref request "hook_event_name" "") "PreToolUse")
                           (redirect-decision request)
@@ -171,6 +201,8 @@
          (rewriting (and (not (error? rewrite)) rewrite))
          (advising (and (not (error? advice)) (string? advice) advice)))
     (cond
+      ;; A bounded read is a complete decision on its own.
+      ((and (not (error? bounded)) bounded) bounded)
       ((and (not rewriting) (not advising)) #f)
       ((not rewriting) (advice-only-decision advising))
       ((not advising) rewriting)
