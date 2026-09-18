@@ -30,8 +30,12 @@
 #include <syslog.h>
 #include <unistd.h>
 
-#if defined(__linux__)
+// POSIX, and used by `df` on every platform. It was inside the Linux branch, which
+// built here because something else pulled it in transitively and failed on macOS
+// with an incomplete `struct statvfs`.
 #include <sys/statvfs.h>
+
+#if defined(__linux__)
 #include <sys/sysinfo.h>
 #elif defined(__APPLE__)
 #include <sys/mount.h>
