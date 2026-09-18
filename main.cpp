@@ -22,7 +22,9 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
 #include <climits>
+#include <dirent.h>
 #include <cstdlib>
 #include <unistd.h>
 
@@ -126,13 +128,35 @@ bool load_library(Interpreter& vm, const std::string& directory, std::string& er
         }
     }
     // Published tools are ordinary Scheme files, loaded after the library they use.
+    //
+    // Read here rather than through the interpreter's own `glob`, because that
+    // resolves inside the capability root: a tool library installed in
+    // $PREFIX/share is invisible from any sandbox that does not contain it, which
+    // is every workspace except this project's own. Tools silently failed to exist
+    // everywhere they were actually wanted.
     const std::string tools = directory + "/tools";
     vm.define("tool-directory", Value::string(tools));
-    try {
-        vm.eval("(load-published-tools tool-directory)");
-    } catch (const std::exception& failure) {
-        error = failure.what();
-        return false;
+    std::vector<std::string> published;
+    if (DIR* handle = ::opendir(tools.c_str())) {
+        while (struct dirent* entry = ::readdir(handle)) {
+            const std::string name = entry->d_name;
+            if (name.size() > 4 && name.compare(name.size() - 4, 4, ".scm") == 0)
+                published.push_back(tools + "/" + name);
+        }
+        ::closedir(handle);
+    }
+    std::sort(published.begin(), published.end());
+    for (const std::string& path : published) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) continue;
+        std::ostringstream text;
+        text << input.rdbuf();
+        try {
+            vm.eval(text.str(), path);
+        } catch (const std::exception& failure) {
+            // One broken tool must not take the library with it.
+            std::fprintf(stderr, "toolscheme: %s: %s\n", path.c_str(), failure.what());
+        }
     }
     return true;
 }
