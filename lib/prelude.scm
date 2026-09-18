@@ -151,3 +151,10 @@
          (not (string=? value ""))
          (not (string=? value "0"))
          (not (string=? value "false")))))
+
+;; An absolute path inside the capability root. Needed for SQL, where DuckDB
+;; refuses a relative name rather than resolving it, and harmless everywhere else.
+(define (rooted path)
+  (if (and (> (string-length path) 0) (char=? (string-ref path 1) #\/))
+      path
+      (string-append capability-root "/" path)))

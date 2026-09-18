@@ -8,6 +8,9 @@
 
 #include "toolscheme.hpp"
 #include "toolscheme_posix.hpp"
+#if defined(TOOLSCHEME_DUCKDB)
+#include "toolscheme_duckdb.hpp"
+#endif
 
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include <climits>
+#include <cstdlib>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -232,6 +237,12 @@ int main(int argc, char** argv) {
 
     Interpreter vm;
     toolscheme::posix::install_all(vm, options.policy);
+#if defined(TOOLSCHEME_DUCKDB)
+    // Optional, and confined to the same root as everything else. Without it the
+    // `sql-query` primitive simply does not exist, which is how every other
+    // capability-backed primitive behaves when nothing backs it.
+    vm.install("sql", toolscheme::duckdb::make_sql(options.policy.root));
+#endif
     if (options.telemetry) vm.set_telemetry(true);
 
     // Script arguments are explicit values, never ambient process state.
@@ -239,6 +250,17 @@ int main(int argc, char** argv) {
     for (const std::string& argument : options.arguments)
         script_arguments.push_back(Value::string(argument));
     vm.define("command-arguments", Value::list(std::move(script_arguments)));
+
+    // The sandbox root, resolved. Every primitive takes paths relative to it, but
+    // a SQL query cannot -- DuckDB checks permission on the literal path before any
+    // search path applies -- so a caller needs to be able to build an absolute one.
+    {
+        char resolved[PATH_MAX];
+        const char* root = ::realpath(options.policy.root.c_str(), resolved)
+                               ? resolved
+                               : options.policy.root.c_str();
+        vm.define("capability-root", Value::string(root));
+    }
 
     // Standard input is bound as a value rather than exposed as a primitive that
     // reads it: a script that consumes stdin should say so on the command line, and

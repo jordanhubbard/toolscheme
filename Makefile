@@ -5,12 +5,48 @@ SANFLAGS = -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -fsanitize=address,undefin
 SOURCES = toolscheme.cpp toolscheme_posix.cpp
 HEADERS = toolscheme.hpp toolscheme_posix.hpp
 
-.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall clean
+# DuckDB is optional and detected, never required. The project has no external
+# dependencies by design, and `toolscheme` has to build, run and keep collecting
+# with nothing installed -- the log is a file, and that is deliberate. When the
+# library is present the `sql-query` primitive appears; when it is not, it does
+# not exist, which is exactly how every other capability-backed primitive behaves.
+#
+#   make vendor-duckdb     fetch the C library into vendor/ (about 38 MB)
+DUCKDB_DIR ?= vendor/duckdb
+ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
+  DUCKDB_FLAGS = -DTOOLSCHEME_DUCKDB -I$(DUCKDB_DIR)
+  DUCKDB_SOURCES = toolscheme_duckdb.cpp
+  # Two rpaths: the checkout for a development build, and a location relative to
+  # the installed binary so `make install` does not leave it pointing at a source
+  # tree that may later move or be deleted.
+  DUCKDB_LINK = -L$(DUCKDB_DIR) -lduckdb \
+                -Wl,-rpath,$(abspath $(DUCKDB_DIR)) \
+                -Wl,-rpath,'$$ORIGIN/../share/toolscheme' 
+endif
+
+.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall vendor-duckdb FORCE clean
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
-toolscheme: $(SOURCES) $(HEADERS) main.cpp
-	$(CXX) $(CXXFLAGS) -I. $(SOURCES) main.cpp -o $@
+# A stamp of the optional-feature configuration. Without it, gaining or losing
+# DuckDB leaves the previous binary in place: nothing in the prerequisite list
+# changes timestamp when a vendored directory appears, so make reports the target
+# up to date and installs a binary built for the other configuration.
+.build-config: FORCE
+	@printf '%s\n' "$(DUCKDB_FLAGS)" | cmp -s - $@ 2>/dev/null || printf '%s\n' "$(DUCKDB_FLAGS)" > $@
+FORCE:
+
+toolscheme: $(SOURCES) $(HEADERS) main.cpp $(DUCKDB_SOURCES) Makefile .build-config
+	$(CXX) $(CXXFLAGS) $(DUCKDB_FLAGS) -I. $(SOURCES) $(DUCKDB_SOURCES) main.cpp $(DUCKDB_LINK) -o $@
+
+DUCKDB_VERSION ?= v1.5.5
+DUCKDB_ARCH ?= $(shell uname -m | sed -e s/aarch64/arm64/ -e s/x86_64/amd64/)
+vendor-duckdb:
+	@mkdir -p vendor
+	curl -fsSL -o vendor/libduckdb.zip \
+	  https://github.com/duckdb/duckdb/releases/download/$(DUCKDB_VERSION)/libduckdb-linux-$(DUCKDB_ARCH).zip
+	cd vendor && rm -rf duckdb && mkdir duckdb && cd duckdb && unzip -q ../libduckdb.zip
+	@echo "fetched DuckDB $(DUCKDB_VERSION) for $(DUCKDB_ARCH); rebuild with: make toolscheme"
 
 toolscheme_test: $(SOURCES) $(HEADERS) test_toolscheme.cpp tests/primitive_examples.inc
 	$(CXX) $(CXXFLAGS) -I. $(SOURCES) test_toolscheme.cpp -o $@
@@ -67,6 +103,7 @@ loop: toolscheme
 	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/redirect-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/steer-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/sql-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/proven-check.scm --lib lib --allow-process \
 	  --allow-program sh --allow-program grep --allow-program head,(checks-hold #t))
 	@$(call check-scheme,tests/synthesis-check.scm --lib lib,(checks-hold #t))
@@ -129,6 +166,9 @@ install: toolscheme
 	   install -m 644 lib/tools/*.scm "$(SHAREDIR)/lib/tools/"; fi
 	install -m 644 hooks/*.scm "$(SHAREDIR)/hooks/"
 	install -m 755 hooks/*.sh "$(SHAREDIR)/hooks/"
+	@if [ -f "$(DUCKDB_DIR)/libduckdb.so" ]; then \
+	   install -m 644 "$(DUCKDB_DIR)/libduckdb.so" "$(SHAREDIR)/"; \
+	   echo "installed libduckdb.so beside the library"; fi
 	@echo
 	@echo "installed: $(BINDIR)/toolscheme and $(SHAREDIR)"
 	@echo "observations will go to $(STATEDIR)"
@@ -163,4 +203,4 @@ adoption: toolscheme
 	@./toolscheme tests/adoption-report.scm --root "$(STATEDIR)" --lib "$(CURDIR)/lib"
 
 clean:
-	rm -f toolscheme toolscheme_test toolscheme_test_san toolscheme_fuzz toolscheme_bench
+	rm -f toolscheme toolscheme_test toolscheme_test_san toolscheme_fuzz toolscheme_bench .build-config

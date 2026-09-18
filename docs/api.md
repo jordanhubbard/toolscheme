@@ -202,6 +202,46 @@ say so on the command line, so one that does not ask can never block on a pipe.
 This is what lets toolscheme serve as its own agent hook, reading the hook's JSON
 on stdin at about 2.5 ms per invocation.
 
+## Analytical queries
+
+Optional. `sql-query` appears only when toolscheme was built with DuckDB, which is
+the same rule every capability-backed primitive follows: nothing installed, no
+primitive. The project has no required external dependencies, and the collector in
+particular has none -- the log is an append-only file on purpose.
+
+```sh
+make vendor-duckdb   # fetch the C library into vendor/ (about 38 MB)
+make toolscheme
+```
+
+```scheme
+(sql-query "SELECT tool, count(*) AS calls
+            FROM read_json_auto('/path/observations.jsonl', ignore_errors=true)
+            WHERE event = 'pre' GROUP BY tool ORDER BY calls DESC")
+; => ((columns ("tool" "calls")) (rows (((tool "Bash") (calls "17530")) ...))
+;     (count 5) (truncated #f))
+```
+
+Every value comes back as text. One representation for every column type is
+simpler than a partial copy of DuckDB's type system on this side, and a caller that
+wants a number casts in SQL, where the types actually live. `(limit N)` bounds the
+rows returned and reports `truncated`.
+
+Queries are confined to the capability root, because a query reads files and would
+otherwise be the one hole in a boundary the rest of the API enforces. The
+confinement is not what it looks like: `allowed_directories` does nothing on its
+own -- it is an exception list carved out of *disabled* external access -- and it
+cannot be set through the C configuration API at all, only on a live connection,
+after which the configuration is locked so no later query can widen it. The adapter
+reads the settings back and refuses to run unconfined if they did not take.
+
+Paths in SQL must be absolute: DuckDB checks permission on the literal path before
+any search path applies, so a relative name is refused rather than resolved. The
+CLI binds `capability-root`, and `(rooted "name")` builds a path from it.
+
+Why it exists: the same question over a 41,000-record log takes **23.1 seconds**
+walking the JSON in Scheme and **0.11 seconds** in SQL.
+
 ## Settings
 
 Behaviour that has to hold however an agent was started is read from the

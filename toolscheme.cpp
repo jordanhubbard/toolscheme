@@ -5825,6 +5825,9 @@ const std::vector<GroupEntry>& group_table() {
         // Waiting for something to happen rather than guessing how long it takes
         {PrimitiveGroup::Watch, WatchCapability::kind, "wait-for", nullptr},
 
+        // Analytical queries over the observation log
+        {PrimitiveGroup::Sql, SqlCapability::kind, "sql-query", nullptr},
+
         // Clock
         {PrimitiveGroup::Clock, ClockCapability::kind, "date", nullptr},
         {PrimitiveGroup::Clock, ClockCapability::kind, "sleep", nullptr},

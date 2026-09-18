@@ -195,6 +195,25 @@ printing the pattern ends the wait instead of serving out the deadline. This is 
 other half of the measured waste: 1,318 calls in the corpus wrote an empty string
 to an interactive session purely to see whether it had finished yet.
 
+## Analytical queries
+
+Optional, and off unless built for. The collector stays an append-only file --
+capture must not depend on anything being reachable -- and DuckDB reads that file
+for analysis:
+
+```sh
+make vendor-duckdb && make toolscheme
+```
+
+```scheme
+(sql-query "SELECT tool, count(*) AS calls FROM read_json_auto('...', ignore_errors=true)
+            WHERE event='pre' GROUP BY tool ORDER BY calls DESC")
+```
+
+The same question over a 41,000-record log: **23.1 s** walking the JSON in Scheme,
+**0.11 s** in SQL. Queries are confined to the capability root like every other
+path in the API.
+
 ## Stable output
 
 Results are stable by default: host metadata that churns between otherwise

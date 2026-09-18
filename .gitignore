@@ -8,3 +8,8 @@ toolscheme
 
 # Observations are local measurements, not source.
 .toolscheme/
+
+# Vendored DuckDB: optional, fetched by `make vendor-duckdb`, not source.
+vendor/
+
+.build-config
