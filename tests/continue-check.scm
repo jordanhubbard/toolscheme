@@ -23,6 +23,10 @@
 
 (define plain "All tests pass. Done.")
 
+;; The shape the first live Codex session actually produced. Every phrase in the
+;; original list missed it, and the feature did nothing as a result.
+(define terse "Uppercased a.txt. Next: uppercase b.txt.")
+
 ;; Counting is what bounds the loop, so it is checked directly rather than by
 ;; driving the hook until it stops.
 (define marker (continue-marker "S"))
@@ -36,6 +40,7 @@
         (list 'question-names-no-step (not (named question)))
         (list 'both-signals-counts-as-a-question (asked both))
         (list 'plain-sign-off-names-nothing (not (named plain)))
+        (list 'terse-next-is-a-step (named terse))
         (list 'count-starts-at-zero (continuations-so-far none "S"))
         (list 'count-follows-the-markers (continuations-so-far twice "S"))
         (list 'default-cap (continue-cap))
@@ -50,6 +55,7 @@
                  ;; The one that must never regress.
                  (asked both)
                  (not (named plain))
+                 (named terse)
                  (= (continuations-so-far none "S") 0)
                  (= (continuations-so-far twice "S") 2)
                  (= (continue-cap) 3)

@@ -191,6 +191,73 @@ Measured, a one-line note in the agent's own instructions (`CLAUDE.md`,
 correcting it after the fact. Put the note there first; the hook is for where
 instructions cannot be edited.
 
+## Continuing a session that stalled
+
+Measured across 30 Codex sessions: 34.5 hours idle waiting for a human, against
+2.7 hours asleep on a timer. Of 141 such stalls, **2** ended with a question. The
+other 139 ended with a completion summary that named the next step and stopped
+anyway. So neither mechanism below approves a decision on your behalf; both
+decline to stop when the agent has already said what it would do next, and both
+refuse the moment a question is in the message.
+
+Off unless asked for:
+
+```
+TOOLSCHEME_CONTINUE=1         # Claude Code, via the Stop hook
+TOOLSCHEME_CODEX_CONTINUE=1   # Codex, via the app server
+TOOLSCHEME_CONTINUE_MAX=3     # bound, both
+```
+
+### Claude Code
+
+Register the `Stop` hook alongside the others and the decision is returned inline:
+
+```json
+"Stop": [{ "matcher": "*", "hooks": [{ "type": "command",
+  "command": "~/.local/share/toolscheme/hooks/observe.sh", "timeout": 5 }] }]
+```
+
+### Codex
+
+Codex has no turn-end hook. Its hook list is `PreToolUse`, `PermissionRequest`,
+`PostToolUse`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`,
+`SubagentStart`, `SubagentStop`, `Interrupt` — none of which run when a turn
+ends, so there is nothing to decline and no configuration that changes that.
+
+What Codex has instead is an app server. A session launched against one can be
+handed a message by `codex queue` while it sits idle. Launch through the wrapper:
+
+```sh
+~/.local/share/toolscheme/hooks/codex-session.sh "fix the failing tests"
+```
+
+It starts the app server if one is not already up, then runs Codex against it;
+every other flag is passed straight through. Then run the watcher on a timer —
+it is a poll, because there is no hook to be told by:
+
+```sh
+* * * * * ~/.local/share/toolscheme/hooks/codex-continue.sh
+```
+
+Run it by hand to see what it would do; with the feature off it reports the same
+threads with `("queued" "dry-run")` and touches nothing.
+
+**This is per-launch, not a setting.** A session started as plain `codex` keeps
+its agent core in-process, where nothing outside it can reach — it will be seen
+by the watcher and skipped. Only sessions started through the wrapper can be
+continued.
+
+### What bounds it
+
+- A question anywhere near the end of the message stops everything, including a
+  message that also names a next step.
+- A thread quiet for less than `TOOLSCHEME_CODEX_IDLE` (90s) may simply be slow;
+  one quiet for more than `TOOLSCHEME_CODEX_STALE` (6h) is over, not stalled.
+- The Codex count comes from the thread's own transcript, not from a side file,
+  so it cannot drift out of step with what actually happened and survives a
+  restart. Each continuation is visible in the session as the text that caused
+  it.
+
 ## Security posture
 
 - Every path resolves inside the capability root; traversal and symlink escapes are

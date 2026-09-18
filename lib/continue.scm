@@ -46,12 +46,18 @@
 ;; Forward-looking language, stated by the agent about its own work. Deliberately
 ;; narrow: a vague sign-off is not a plan, and continuing on one produces an agent
 ;; that wanders rather than works.
+;;
+;; "next: " earns its place by observation rather than guesswork. The first live
+;; Codex session this was tested against ended "Uppercased a.txt. Next: uppercase
+;; b.txt." -- as clear a statement of intent as the corpus phrases, and missed by
+;; every one of them. The trailing space keeps it from matching "nextfoo:".
 (define (names-a-next-step? text)
   (let ((lower (string-downcase text)))
     (any? (lambda (phrase) (string-contains? lower phrase))
-          '("next step" "next required" "next slice" "remains open" "still open"
-            "still needs" "not yet implemented" "not yet done" "todo:" "to do:"
-            "remaining work" "follow-up" "follow up:" "outstanding"))))
+          '("next step" "next required" "next slice" "next: " "next up"
+            "remains open" "still open" "still needs" "not yet implemented"
+            "not yet done" "todo:" "to do:" "remaining work" "remaining:"
+            "follow-up" "follow up:" "outstanding"))))
 
 (define (continue-marker session) (string-append "CONTINUED " session))
 
