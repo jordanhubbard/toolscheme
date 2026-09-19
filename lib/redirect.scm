@@ -186,9 +186,12 @@
                                 (append input (list (list "limit" limit))))))))))
 
 (define (hook-decision request)
-  (if (equal? (field-ref request "hook_event_name" "") "SessionStart")
-      (session-decision request)
-      (tool-decision request)))
+  (let ((event (field-ref request "hook_event_name" "")))
+    (cond ((equal? event "SessionStart") (session-decision request))
+          ((equal? event "Stop")
+           (let ((decision (catch-errors (lambda () (continue-decision request)))))
+             (if (or (error? decision) (not decision)) #f decision)))
+          (else (tool-decision request)))))
 
 (define (tool-decision request)
   (let* ((bounded (catch-errors (lambda () (bound-read-decision request))))
