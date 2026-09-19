@@ -32,8 +32,13 @@ jobs:
         with:
           name: toolscheme-${{ matrix.os }}
           path: dist/*
+          if-no-files-found: error
       - name: Optional DuckDB installation
-        run: make vendor-duckdb && make toolscheme install-test && ./toolscheme tests/sql-check.scm --lib lib | grep -F '(checks-hold #t)'
+        shell: bash
+        run: |
+          make vendor-duckdb
+          make toolscheme install-test
+          ./toolscheme tests/sql-check.scm --lib lib | grep -F '(checks-hold #t)'
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: portable
