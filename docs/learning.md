@@ -40,10 +40,11 @@ A record is durable in the local outbox immediately. The next sync puts it in a 
 - `learning-git/records/HOST/SHA256.json`: canonical, immutable, schema-versioned records. Separate files let Git merge concurrent hosts without both rewriting a shared log or index.
 - `learning-outbox/`: crash-safe local records waiting for a commit.
 - `learning-cursor.json`: local byte checkpoint. Checkpointing follows durable outbox writes; replaying a batch produces identical filenames.
+- `learning-capture.json`: a prepared batch and its next checkpoint. Recovery finishes this exact batch even if capture continued while the worker was down.
 - `learning-snapshot.json`: an atomically replaced, bounded read model. Startup reads at most 64 KiB and consumes at most 16 notes / 8 KiB.
 - `learning-sync-status.json`: last sync status, including offline failure.
 
-No-op syncs create no commits and leave an unchanged snapshot untouched. Sync fetches only the configured remote and no tags, merges without rebasing or force-pushing, and retries a rejected push up to three times. Each Git process has a 45-second deadline. A process lock prevents overlapping local sync/record operations and is released automatically on process exit.
+No-op syncs create no commits, skip rebuilding an unchanged Git snapshot, and leave its file untouched. Sync fetches only the configured remote and no tags, merges without rebasing or force-pushing, and retries a rejected push up to three times. Each Git process has a 45-second deadline. A process lock prevents overlapping local sync/record operations and is released automatically on process exit.
 
 Steering revisions are immutable events. For an ID, the greatest `(timestamp-in-nanoseconds, random-ID)` revision wins, including disabled revisions. Host clocks should be synchronized; a host with a future clock can otherwise win until corrected. To roll back advice, publish a new revision or disable its ID. `prefer-event-waits` controls the automatically derived wait advice too. Genuine Git conflicts stop sync and preserve local commits for manual review. Existing startup state remains usable.
 

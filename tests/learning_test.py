@@ -2,12 +2,14 @@
 """Exercise real Git repositories, two independent hosts, and actual CLI startup."""
 import json
 import fcntl
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/learning.py"
@@ -110,6 +112,26 @@ class LearningTest(unittest.TestCase):
             result = self.call(self.a, "sync", ok=False)
             self.assertIn("another learning operation", result.stderr)
         self.call(self.a, "sync")
+
+    def test_capture_crash_then_append_does_not_double_count(self):
+        spec = importlib.util.spec_from_file_location("learning", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        event = json.dumps(dict(session="crash", event="pre", command="sleep 10")) + "\n"
+        log = self.a / "observations.jsonl"
+        log.write_text(event)
+        enqueue = module.enqueue
+        def interrupted(*args):
+            enqueue(*args)
+            raise RuntimeError("simulated crash after durable outbox write")
+        with mock.patch.object(module, "enqueue", side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, "simulated crash"):
+                module.capture(self.a, module.configuration(self.a))
+        with log.open("a") as out:
+            out.write(event)
+        self.call(self.a, "sync")
+        self.call(self.a, "sync")
+        self.assertEqual(self.snapshot(self.a)["totals"]["pre"], 2)
 
     def test_snapshot_is_data_and_hook_delivers_once(self):
         note = '(begin (write-file "PWNED" "x"))'

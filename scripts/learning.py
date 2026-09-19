@@ -38,14 +38,19 @@ def atomic(path, value):
             out.flush()
             os.fsync(out.fileno())
         os.replace(temporary, path)
+        directory = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
 
 
-def read_json(path, default=None):
+def read_json(path, default=None, limit=MAX_RECORD):
     try:
-        if path.is_symlink() or path.stat().st_size > MAX_RECORD:
+        if path.is_symlink() or path.stat().st_size > limit:
             return default
         return json.loads(path.read_text())
     except (OSError, ValueError):
@@ -100,6 +105,13 @@ def capture(state, config):
     No raw command, path, input, response, or session identifier leaves this host.
     Session IDs are hashed; aggregates retain the evidence behind shared advice.
     """
+    transaction_path = state / "learning-capture.json"
+    transaction = read_json(transaction_path, limit=MAX_BATCH * 2)
+    if transaction_path.exists():
+        if not isinstance(transaction, dict):
+            raise RuntimeError("invalid pending capture transaction; preserve it for recovery")
+        finish_capture(state, config, transaction)
+        return
     source = state / "observations.jsonl"
     if not source.exists():
         return
@@ -140,10 +152,21 @@ def capture(state, config):
     # One object per session per batch: bounded files, independent host writes,
     # and retries deduplicate without diffing or rewriting a growing JSON array.
     batch = hashlib.sha256((identity + ":" + str(offset)).encode() + data).hexdigest()
-    for session, counts in sorted(sessions.items()):
-        enqueue(state, config, dict(kind="session", session=session, batch=batch, **counts))
-    atomic(state / "learning-cursor.json", dict(identity=identity, offset=offset + end,
-                                               rejected=checkpoint.get("rejected", 0) + rejected))
+    transaction = dict(batch=batch, sessions=sessions,
+                       cursor=dict(identity=identity, offset=offset + end,
+                                   rejected=checkpoint.get("rejected", 0) + rejected))
+    # Freeze the batch before publishing any records. Otherwise a crash followed
+    # by a growing log could regroup the old bytes and count them twice.
+    atomic(transaction_path, transaction)
+    finish_capture(state, config, transaction)
+
+
+def finish_capture(state, config, transaction):
+    for session, counts in sorted(transaction["sessions"].items()):
+        enqueue(state, config, dict(kind="session", session=session,
+                                   batch=transaction["batch"], **counts))
+    atomic(state / "learning-cursor.json", transaction["cursor"])
+    (state / "learning-capture.json").unlink()
 
 
 def records(repo):
