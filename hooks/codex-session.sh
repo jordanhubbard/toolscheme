@@ -23,7 +23,7 @@ command -v codex >/dev/null 2>&1 || { echo "codex is not on PATH" >&2; exit 1; }
 # check is for the process, not the file.
 if ! pgrep -f "app-server --listen unix://$SOCK" >/dev/null 2>&1; then
   rm -f "$SOCK"
-  setsid codex app-server --listen "unix://$SOCK" >"$STATE/codex-app-server.log" 2>&1 </dev/null &
+  nohup codex app-server --listen "unix://$SOCK" >"$STATE/codex-app-server.log" 2>&1 </dev/null &
   # The socket appears a moment after the process does; without this the first
   # session races it and falls back to an ordinary unreachable one.
   i=0

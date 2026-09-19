@@ -37,7 +37,7 @@ ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
                 -Wl,-rpath,'$(DUCKDB_RUNTIME)'
 endif
 
-.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall vendor-duckdb FORCE clean
+.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall vendor-duckdb FORCE clean learning-test install-test package
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.

@@ -184,6 +184,10 @@ void load_learnings(Interpreter& vm) {
         vm.define("learning-json", Value::string(std::string(buffer, static_cast<std::size_t>(input.gcount()))));
         const Value parsed = vm.eval("(field-ref (json-parse learning-json) 'value '())");
         vm.define("learning-snapshot", parsed);
+        if (!vm.eval("(equal? (field-ref learning-snapshot \"schema\" #f) 1)").truthy()) {
+            vm.define("learning-snapshot", Value::list({}));
+            return;
+        }
         const Value notes = vm.eval("(field-ref learning-snapshot \"notes\" '())");
         std::string combined;
         if (notes.is_list()) {
