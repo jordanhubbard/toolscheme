@@ -132,23 +132,38 @@ void bench_list_construction() {
         values.reserve(count);
         for (std::size_t i = 0; i < count; ++i) values.push_back(Value::integer(
             static_cast<std::int64_t>(i)));
-        return median_milliseconds([&values] {
+        // std::vector's copy is the linear reference, with exactly the same
+        // element copies, allocation sizes and destruction as the list input.
+        // On glibc, crossing the mmap threshold can change allocation costs by
+        // an order of magnitude; a ratio across sizes alone tests the allocator.
+        const double copy = median_milliseconds([&values] {
+            for (int repeat = 0; repeat < 5; ++repeat) {
+                const std::vector<Value> copied(values);
+                volatile std::size_t length = copied.size();
+                (void)length;
+            }
+        });
+        const double wrapped = median_milliseconds([&values] {
             for (int repeat = 0; repeat < 5; ++repeat) {
                 const Value built = Value::list(values);
                 (void)built;
             }
         });
+        return std::make_pair(wrapped, copy);
     };
-    // Both inputs exceed the cache of the Intel release runners. Comparing a
-    // cache-resident input against a streaming one measures two memory regimes.
-    const double small = build(1000000);
-    const double large = build(4000000);
-    report("bulk list construction (1M x5)", small, 5000000);
-    report("bulk list construction (4M x5)", large, 20000000);
-    // Four times the elements in at most eight times the wall clock is linear enough
-    // to distinguish from any quadratic behaviour.
-    require(large < small * 8 + 5, "bulk list construction is linear",
-            "1M took " + std::to_string(small) + " ms, 4M took " + std::to_string(large) + " ms");
+    const auto small = build(1000000);
+    const auto large = build(4000000);
+    report("bulk list construction (1M x5)", small.first, 5000000);
+    report("linear copy reference (1M x5)", small.second, 5000000);
+    report("bulk list construction (4M x5)", large.first, 20000000);
+    report("linear copy reference (4M x5)", large.second, 20000000);
+    // Bound overhead relative to a known linear operation at BOTH sizes. This
+    // also rejects a uniformly slow wrapper that a size-ratio test would allow.
+    for (const auto& measured : {small, large})
+        require(measured.first < measured.second * 2 + 5,
+                "bulk list construction stays within linear-copy budget",
+                "list took " + std::to_string(measured.first) + " ms, linear copy took " +
+                    std::to_string(measured.second) + " ms");
 }
 
 void bench_list_access() {
