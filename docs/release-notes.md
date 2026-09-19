@@ -6,4 +6,4 @@ The interpreter requires no external library. Git synchronization requires Pytho
 
 Download the archive for your operating system and architecture, verify its SHA-256 checksum, and extract it to a permanent directory. Add its `bin` directory to PATH. The `bin` and `share` directories must remain together. Agent configuration is explicit; installing the archive does not modify any agent's settings.
 
-Linux release binaries target Ubuntu 24.04 or compatible systems with glibc 2.39+; macOS release binaries target macOS 15+. Windows native support is not included. This release does not automatically execute synthesized shared tools or turn on transparent command rewriting.
+Linux release binaries target Ubuntu 22.04 or compatible systems with glibc 2.35+; macOS release binaries target macOS 15+. Windows native support is not included. This release does not automatically execute synthesized shared tools or turn on transparent command rewriting.

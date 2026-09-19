@@ -64,6 +64,16 @@ double milliseconds(const std::function<void()>& body) {
         .count();
 }
 
+// Complexity comparisons need warm pages and more than one scheduler sample.
+// Absolute timings below remain useful observations, but a single descheduling
+// event must not be mistaken for a change in algorithmic complexity.
+double median_milliseconds(const std::function<void()>& body) {
+    body();
+    double samples[] = {milliseconds(body), milliseconds(body), milliseconds(body)};
+    std::sort(samples, samples + 3);
+    return samples[1];
+}
+
 void report(const std::string& name, double ms, double operations) {
     const double per = operations > 0 ? ms * 1e6 / operations : 0;
     std::printf("  %-34s %9.3f ms  %10.1f ns/op\n", name.c_str(), ms, per);
@@ -122,21 +132,23 @@ void bench_list_construction() {
         values.reserve(count);
         for (std::size_t i = 0; i < count; ++i) values.push_back(Value::integer(
             static_cast<std::int64_t>(i)));
-        return milliseconds([&values] {
-            for (int repeat = 0; repeat < 20; ++repeat) {
+        return median_milliseconds([&values] {
+            for (int repeat = 0; repeat < 5; ++repeat) {
                 const Value built = Value::list(values);
                 (void)built;
             }
         });
     };
-    const double small = build(100000);
-    const double large = build(400000);
-    report("bulk list construction (100k x20)", small, 2000000);
-    report("bulk list construction (400k x20)", large, 8000000);
+    // Both inputs exceed the cache of the Intel release runners. Comparing a
+    // cache-resident input against a streaming one measures two memory regimes.
+    const double small = build(1000000);
+    const double large = build(4000000);
+    report("bulk list construction (1M x5)", small, 5000000);
+    report("bulk list construction (4M x5)", large, 20000000);
     // Four times the elements in at most eight times the wall clock is linear enough
     // to distinguish from any quadratic behaviour.
     require(large < small * 8 + 5, "bulk list construction is linear",
-            "100k took " + std::to_string(small) + " ms, 400k took " + std::to_string(large) + " ms");
+            "1M took " + std::to_string(small) + " ms, 4M took " + std::to_string(large) + " ms");
 }
 
 void bench_list_access() {
@@ -148,7 +160,7 @@ void bench_list_access() {
     const Value large = Value::list(large_values);
 
     const auto length_time = [](const Value& list) {
-        return milliseconds([&list] {
+        return median_milliseconds([&list] {
             volatile std::size_t sink = 0;
             for (int i = 0; i < 200000; ++i) sink += list.list_size();
             (void)sink;
@@ -163,20 +175,25 @@ void bench_list_access() {
                 std::to_string(large_length) + " ms");
 
     const auto index_time = [](const Value& list, std::size_t span) {
-        return milliseconds([&list, span] {
+        const std::size_t base = list.list_size() - span;
+        return median_milliseconds([&list, span, base] {
             volatile std::int64_t sink = 0;
             for (std::size_t i = 0; i < 200000; ++i)
-                sink += list.list_at((i * 7919) % span).as_integer();
+                sink += list.list_at(base + (i * 7919) % span).as_integer();
             (void)sink;
         });
     };
     const double small_index = index_time(small, 1000);
-    const double large_index = index_time(large, 1000000);
+    // Equal working sets, at the end of each list. A traversal or a prefix copy
+    // still scales with list length, but CPU cache misses no longer masquerade
+    // as an O(n) implementation. Report full-span latency separately below.
+    const double large_index = index_time(large, 1000);
     report("list_at (1k elements)", small_index, 200000);
     report("list_at (1M elements)", large_index, 200000);
     require(large_index < small_index * 4 + 5, "random access is O(1)",
             "1k took " + std::to_string(small_index) + " ms, 1M took " +
                 std::to_string(large_index) + " ms");
+    report("list_at (1M, full-span random)", index_time(large, 1000000), 200000);
 
     const double cdr_ms = milliseconds([&large] {
         Value at = large;
