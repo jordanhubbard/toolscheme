@@ -91,6 +91,10 @@ std::string locate_library(const std::string& explicit_path) {
     if (got > 0) { buffer[got] = '\0'; self = buffer; }
 #endif
     if (!self.empty()) {
+        // macOS reports the invocation path, which may be a symlink installed on
+        // PATH. Resolve it before looking for the adjacent share directory.
+        char resolved[PATH_MAX];
+        if (::realpath(self.c_str(), resolved)) self = resolved;
         const std::size_t slash = self.find_last_of('/');
         if (slash != std::string::npos) {
             const std::string bin = self.substr(0, slash);

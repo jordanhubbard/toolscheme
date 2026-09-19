@@ -17,6 +17,9 @@ with tempfile.TemporaryDirectory(prefix="toolscheme install ") as tmp:
     env = dict(os.environ, TOOLSCHEME_STATE=str(base / "state"))
     env.pop("TOOLSCHEME_LIB", None)
     binary = relocated / "bin/toolscheme"
+    link = base / "toolscheme-link"
+    link.symlink_to(binary)
+    binary = link
     def call(*args, data=None):
         result = subprocess.run([str(binary), *args], cwd=base, env=env, input=data,
                                 text=True, capture_output=True, timeout=10)

@@ -18,6 +18,7 @@
 #include <new>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 using toolscheme::Interpreter;
 using toolscheme::Value;
