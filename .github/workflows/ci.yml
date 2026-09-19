@@ -1,0 +1,60 @@
+name: Portable release gates
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: portable-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and test
+        run: make test loop learning-test install-test
+      - name: Sanitizers and property fuzzing
+        run: make sanitize fuzz
+      - name: Performance targets
+        run: make bench
+      - name: Package
+        run: make package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: toolscheme-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+      - name: Optional DuckDB installation
+        shell: bash
+        run: |
+          make vendor-duckdb
+          make toolscheme install-test
+          ./toolscheme tests/sql-check.scm --lib lib | grep -F '(checks-hold #t)'
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: portable
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: toolscheme-*
+          path: dist
+          merge-multiple: true
+      - name: Publish tested artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${GITHUB_REF_NAME}" = "v$(cat VERSION.txt)"
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "ToolScheme $GITHUB_REF_NAME" --notes-file docs/release-notes.md

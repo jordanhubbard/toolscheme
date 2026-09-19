@@ -181,22 +181,35 @@
 ;; Returns the advice string, or #f. Recording the key is a side effect of asking,
 ;; because a call that is never remembered can never be recognized as a repeat.
 (define (steer-advice request)
-  (if (or (not (steer-enabled?))
-          (not (equal? (field-ref request "hook_event_name" "") "PreToolUse")))
+  (if (or (not (equal? (field-ref request "hook_event_name" "") "PreToolUse"))
+          (and (not (steer-enabled?)) (string-null? learning-notes)))
       #f
       (let* ((session (field-ref request "session_id" ""))
              (call (field-ref request "tool_use_id" ""))
              (keys (session-keys session))
-             (found (advice-for request keys call))
+             (shared (shared-learning-advice session keys))
+             (found (if (steer-enabled?) (advice-for request keys call) #f))
              (key (steer-key request)))
         (remember-key session key call)
         (if (not found)
-            #f
+            shared
             (begin
               (if (field-ref found 'kind)
                   (remember-key session (field-ref found 'kind) call)
                   #f)
-              (field-ref found 'text))))))
+              (if shared (string-append shared "\n" (field-ref found 'text))
+                  (field-ref found 'text)))))))
+
+;; The CLI fills this from the local snapshot after loading the library. No Git
+;; process, remote request, or evaluation of shared source occurs in a hook.
+(define learning-notes "")
+(define (shared-learning-advice session keys)
+  (if (or (string-null? learning-notes)
+          (> (count-key keys "SHARED-LEARNING" "") 0))
+      #f
+      (begin
+        (remember-key session "SHARED-LEARNING" "learning")
+        (string-append "ToolScheme shared learnings (advisory):\n" learning-notes))))
 
 
 ;; ---------------------------------------------------------------------------
@@ -223,11 +236,12 @@
 
 (define (session-start-advice request)
   (let* ((session (field-ref request "session_id" ""))
-         (keys (session-keys session)))
+         (keys (session-keys session))
+         (shared (shared-learning-advice session keys)))
     (cond
-      ((not (steer-enabled?)) #f)
+      ((not (steer-enabled?)) shared)
       ;; An agent may start a session hook more than once, as it does for tools.
-      ((> (count-key keys "SESSION-ADVICE" "") 0) #f)
+      ((> (count-key keys "SESSION-ADVICE" "") 0) shared)
       (else
         (remember-key session "SESSION-ADVICE" "session")
-        session-start-note))))
+        (if shared (string-append shared "\n" session-start-note) session-start-note)))))

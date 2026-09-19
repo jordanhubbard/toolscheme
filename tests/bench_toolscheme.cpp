@@ -18,6 +18,7 @@
 #include <new>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 using toolscheme::Interpreter;
 using toolscheme::Value;
@@ -61,6 +62,16 @@ double milliseconds(const std::function<void()>& body) {
     body();
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
         .count();
+}
+
+// Complexity comparisons need warm pages and more than one scheduler sample.
+// Absolute timings below remain useful observations, but a single descheduling
+// event must not be mistaken for a change in algorithmic complexity.
+double median_milliseconds(const std::function<void()>& body) {
+    body();
+    double samples[] = {milliseconds(body), milliseconds(body), milliseconds(body)};
+    std::sort(samples, samples + 3);
+    return samples[1];
 }
 
 void report(const std::string& name, double ms, double operations) {
@@ -121,21 +132,38 @@ void bench_list_construction() {
         values.reserve(count);
         for (std::size_t i = 0; i < count; ++i) values.push_back(Value::integer(
             static_cast<std::int64_t>(i)));
-        return milliseconds([&values] {
-            for (int repeat = 0; repeat < 20; ++repeat) {
+        // std::vector's copy is the linear reference, with exactly the same
+        // element copies, allocation sizes and destruction as the list input.
+        // On glibc, crossing the mmap threshold can change allocation costs by
+        // an order of magnitude; a ratio across sizes alone tests the allocator.
+        const double copy = median_milliseconds([&values] {
+            for (int repeat = 0; repeat < 5; ++repeat) {
+                const std::vector<Value> copied(values);
+                volatile std::size_t length = copied.size();
+                (void)length;
+            }
+        });
+        const double wrapped = median_milliseconds([&values] {
+            for (int repeat = 0; repeat < 5; ++repeat) {
                 const Value built = Value::list(values);
                 (void)built;
             }
         });
+        return std::make_pair(wrapped, copy);
     };
-    const double small = build(100000);
-    const double large = build(400000);
-    report("bulk list construction (100k x20)", small, 2000000);
-    report("bulk list construction (400k x20)", large, 8000000);
-    // Four times the elements in at most eight times the wall clock is linear enough
-    // to distinguish from any quadratic behaviour.
-    require(large < small * 8 + 5, "bulk list construction is linear",
-            "100k took " + std::to_string(small) + " ms, 400k took " + std::to_string(large) + " ms");
+    const auto small = build(1000000);
+    const auto large = build(4000000);
+    report("bulk list construction (1M x5)", small.first, 5000000);
+    report("linear copy reference (1M x5)", small.second, 5000000);
+    report("bulk list construction (4M x5)", large.first, 20000000);
+    report("linear copy reference (4M x5)", large.second, 20000000);
+    // Bound overhead relative to a known linear operation at BOTH sizes. This
+    // also rejects a uniformly slow wrapper that a size-ratio test would allow.
+    for (const auto& measured : {small, large})
+        require(measured.first < measured.second * 2 + 5,
+                "bulk list construction stays within linear-copy budget",
+                "list took " + std::to_string(measured.first) + " ms, linear copy took " +
+                    std::to_string(measured.second) + " ms");
 }
 
 void bench_list_access() {
@@ -147,7 +175,7 @@ void bench_list_access() {
     const Value large = Value::list(large_values);
 
     const auto length_time = [](const Value& list) {
-        return milliseconds([&list] {
+        return median_milliseconds([&list] {
             volatile std::size_t sink = 0;
             for (int i = 0; i < 200000; ++i) sink += list.list_size();
             (void)sink;
@@ -162,20 +190,25 @@ void bench_list_access() {
                 std::to_string(large_length) + " ms");
 
     const auto index_time = [](const Value& list, std::size_t span) {
-        return milliseconds([&list, span] {
+        const std::size_t base = list.list_size() - span;
+        return median_milliseconds([&list, span, base] {
             volatile std::int64_t sink = 0;
             for (std::size_t i = 0; i < 200000; ++i)
-                sink += list.list_at((i * 7919) % span).as_integer();
+                sink += list.list_at(base + (i * 7919) % span).as_integer();
             (void)sink;
         });
     };
     const double small_index = index_time(small, 1000);
-    const double large_index = index_time(large, 1000000);
+    // Equal working sets, at the end of each list. A traversal or a prefix copy
+    // still scales with list length, but CPU cache misses no longer masquerade
+    // as an O(n) implementation. Report full-span latency separately below.
+    const double large_index = index_time(large, 1000);
     report("list_at (1k elements)", small_index, 200000);
     report("list_at (1M elements)", large_index, 200000);
     require(large_index < small_index * 4 + 5, "random access is O(1)",
             "1k took " + std::to_string(small_index) + " ms, 1M took " +
                 std::to_string(large_index) + " ms");
+    report("list_at (1M, full-span random)", index_time(large, 1000000), 200000);
 
     const double cdr_ms = milliseconds([&large] {
         Value at = large;

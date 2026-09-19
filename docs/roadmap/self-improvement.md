@@ -340,8 +340,12 @@ from 0 of 3 to 3 of 3. What it cannot do is get there first.
 
 ## Storage and deployment
 
-Not yet built; recorded here with what the running system now knows about its own
-access patterns, because those decide the answer.
+The Git-backed deployment is implemented in `scripts/learning.py`; see
+`docs/learning.md`. Hosts publish immutable session summaries and steering
+revisions periodically, and startup reads a bounded local snapshot without IPC
+or a network dependency. DuckDB remains optional for local raw-log analysis.
+The following measurements motivated the split between capture and analysis;
+the centralized database service discussed below is not implemented or required.
 
 The log is 33 MB after a day and a half -- roughly 22 MB a day, 650 MB a month --
 and a full analytical pass over 86,000 records already takes 24 seconds. That is

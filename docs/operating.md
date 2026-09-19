@@ -110,17 +110,17 @@ This is the part worth being precise about.
 agents at all. It interposes *beneath* one — between the agent and the tool it is
 about to run — by being the program that agent already invokes at that boundary.
 
-**It is a single machine.** The hook is a local process; it appends to a local
+**Capture is local to each machine.** The hook is a local process; it appends to a local
 file; the analysis reads that file. Two agents on one machine share one log, which
 is why a Claude Code session and a Codex session appear side by side in the same
-report. Two machines do not share anything.
+report. Hosts configured with the same learning Git remote share session summaries
+and steering notes through periodic synchronization; raw observations remain local.
 
 **MCP is the other direction.** `toolscheme mcp` serves published tools *to* an
 agent; it is not how observations are collected.
 
-Collecting across machines would need the piece described in
-`docs/roadmap/self-improvement.md` and not yet built: the capture stays a local
-append-only file, and a service ships those records somewhere central. The reason
+See [Durable learning with Git](learning.md) for configuration. Capture stays a local
+append-only file, and a separate job commits summaries to Git. The reason
 capture must stay local and dependency-free is that the hook runs on every single
 tool call, and one that needs a network or a database turns an outage into a
 failure in every session on the machine.

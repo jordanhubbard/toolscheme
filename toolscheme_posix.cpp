@@ -23,17 +23,13 @@
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <syslog.h>
 #include <unistd.h>
-
-// POSIX, and used by `df` on every platform. It was inside the Linux branch, which
-// built here because something else pulled it in transitively and failed on macOS
-// with an incomplete `struct statvfs`.
-#include <sys/statvfs.h>
 
 #if defined(__linux__)
 #include <sys/sysinfo.h>

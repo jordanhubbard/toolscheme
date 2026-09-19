@@ -36,6 +36,10 @@ host that the policy did not permit.
 
 ## Installing
 
+Download a relocatable macOS/Linux archive from GitHub Releases, extract it, and
+add its `bin` directory to PATH. Keep `bin` and `share` together. Or build from
+source with a C++17 compiler:
+
 ```sh
 make install                    # ~/.local by default
 make install PREFIX=/usr/local  # or system-wide
@@ -44,6 +48,25 @@ make install PREFIX=/usr/local  # or system-wide
 A hook that lives in a repository can only watch that repository, so observing
 every session means installing outside any checkout. `make install` prints the
 agent configuration to add; it writes none of it for you.
+
+## Durable learning across machines
+
+Each host keeps capturing locally. A separate scheduled job commits learning
+sessions to Git, merges other hosts' records, pushes, and refreshes a bounded
+local startup snapshot. An unavailable remote never delays a tool hook.
+
+```sh
+toolscheme learn init --remote git@github.com:YOUR_ACCOUNT/toolscheme-learnings.git
+toolscheme learn sync
+toolscheme learn schedule
+toolscheme learn record bounded-reads 'Read relevant ranges before whole files.'
+```
+
+Git stores session summaries and versioned advisory notes, not raw transcripts
+or executable generated code. Notes are consumed once per agent session through
+the existing hook. Python 3.9+ and Git 2.28+ are required for learning management;
+the interpreter itself remains dependency-free. See [the learning guide](docs/learning.md)
+for the data contract, offline behavior, revocation, and scheduling.
 
 ## Attaching to an agent
 

@@ -59,6 +59,7 @@ void usage() {
         "  toolscheme repl              interactive read-eval-print loop\n"
         "  toolscheme mcp               serve the published tools over MCP on stdio\n"
         "  toolscheme analyze [paths]   rank tool-use opportunities from agent transcripts\n"
+        "  toolscheme learn <command>   durable learning journal and periodic Git sync\n"
         "\n"
         "Options:\n"
         "  --root <dir>        filesystem sandbox root (default: the current directory)\n"
@@ -77,7 +78,7 @@ void usage() {
 std::string locate_library(const std::string& explicit_path) {
     if (!explicit_path.empty()) return explicit_path;
     if (const char* from_environment = std::getenv("TOOLSCHEME_LIB")) return from_environment;
-    std::vector<std::string> candidates{"lib"};
+    std::vector<std::string> candidates;
     // Finding one's own executable has no portable spelling: /proc is Linux-only
     // and silently absent on macOS, which the project also targets.
     std::string self;
@@ -90,6 +91,10 @@ std::string locate_library(const std::string& explicit_path) {
     if (got > 0) { buffer[got] = '\0'; self = buffer; }
 #endif
     if (!self.empty()) {
+        // macOS reports the invocation path, which may be a symlink installed on
+        // PATH. Resolve it before looking for the adjacent share directory.
+        char resolved[PATH_MAX];
+        if (::realpath(self.c_str(), resolved)) self = resolved;
         const std::size_t slash = self.find_last_of('/');
         if (slash != std::string::npos) {
             const std::string bin = self.substr(0, slash);
@@ -101,6 +106,7 @@ std::string locate_library(const std::string& explicit_path) {
             candidates.push_back(bin + "/../share/toolscheme/lib");
         }
     }
+    candidates.push_back("lib");
     for (const std::string& candidate : candidates)
         if (::access((candidate + "/mcp.scm").c_str(), R_OK) == 0) return candidate;
     return "lib";
@@ -162,6 +168,48 @@ bool load_library(Interpreter& vm, const std::string& directory, std::string& er
     return true;
 }
 
+// A local, bounded data snapshot, never executable Scheme or a network request.
+// Missing or corrupt state cannot prevent startup. The sync worker alone reads
+// Git history and publishes this file with atomic rename.
+void load_learnings(Interpreter& vm) {
+    vm.define("learning-notes", Value::string(""));
+    vm.define("learning-snapshot", Value::list({}));
+    std::string state;
+    if (const char* p = std::getenv("TOOLSCHEME_STATE")) state = p;
+    else if (const char* p = std::getenv("XDG_STATE_HOME")) state = std::string(p) + "/toolscheme";
+    else if (const char* p = std::getenv("HOME")) state = std::string(p) + "/.local/state/toolscheme";
+    if (state.empty()) return;
+    std::ifstream input(state + "/learning-snapshot.json", std::ios::binary);
+    if (!input) return;
+    char buffer[65537];
+    input.read(buffer, sizeof buffer);
+    if (input.gcount() > 65536) return;
+    try {
+        vm.define("learning-json", Value::string(std::string(buffer, static_cast<std::size_t>(input.gcount()))));
+        const Value parsed = vm.eval("(field-ref (json-parse learning-json) 'value '())");
+        vm.define("learning-snapshot", parsed);
+        if (!vm.eval("(equal? (field-ref learning-snapshot \"schema\" #f) 1)").truthy()) {
+            vm.define("learning-snapshot", Value::list({}));
+            return;
+        }
+        const Value notes = vm.eval("(field-ref learning-snapshot \"notes\" '())");
+        std::string combined;
+        if (notes.is_list()) {
+            const std::size_t count = std::min<std::size_t>(notes.list_size(), 16);
+            for (std::size_t i = 0; i < count; ++i) {
+                const Value note = notes.list_at(i);
+                if (note.type() != Value::Type::String || note.as_string().size() > 1024) continue;
+                if (combined.size() + note.as_string().size() + 1 > 8192) break;
+                if (!combined.empty()) combined += '\n';
+                combined += note.as_string();
+            }
+        }
+        vm.define("learning-notes", Value::string(combined));
+    } catch (const std::exception&) {
+        vm.define("learning-snapshot", Value::list({}));
+    }
+}
+
 int run_repl(Interpreter& vm, const Options& options) {
     if (!options.quiet)
         std::fprintf(stderr, "toolscheme -- %zu primitives. Ctrl-D to exit.\n",
@@ -217,6 +265,21 @@ int status_of(Interpreter& vm, const Value& result) {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--version") {
+        std::puts("toolscheme " TOOLSCHEME_VERSION);
+        return 0;
+    }
+    if (argc > 1 && std::string(argv[1]) == "learn") {
+        const std::string library = locate_library("");
+        std::string script = library + "/../scripts/learning.py";
+        if (::access(script.c_str(), R_OK) != 0) script = library + "/../learning.py";
+        std::vector<char*> arguments{const_cast<char*>("python3"), const_cast<char*>(script.c_str())};
+        for (int i = 2; i < argc; ++i) arguments.push_back(argv[i]);
+        arguments.push_back(nullptr);
+        ::execvp("python3", arguments.data());
+        std::fprintf(stderr, "toolscheme learn requires Python 3 and Git\n");
+        return 1;
+    }
     Options options;
     options.policy.root = ".";
     std::vector<std::string> positional;
@@ -300,6 +363,7 @@ int main(int argc, char** argv) {
     const std::string library = locate_library(options.library);
     std::string library_error;
     const bool library_loaded = load_library(vm, library, library_error);
+    if (library_loaded) load_learnings(vm);
     // A library that fails to parse used to be silent for -e and for scripts, so a
     // stray paren in one file made every procedure in the library "unbound" with
     // no hint as to why. It is fatal where the library is required and a warning
