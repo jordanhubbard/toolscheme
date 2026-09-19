@@ -133,6 +133,17 @@ class LearningTest(unittest.TestCase):
         self.call(self.a, "sync")
         self.assertEqual(self.snapshot(self.a)["totals"]["pre"], 2)
 
+    def test_git_is_authoritative_when_records_are_removed(self):
+        self.call(self.a, "record", "temporary", "Temporary guidance.")
+        self.call(self.a, "sync")
+        self.call(self.b, "sync")
+        repo = self.a / "learning-git"
+        subprocess.run(["git", "-C", str(repo), "rm", "-r", "records"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "Remove erroneous imported record"], check=True, capture_output=True)
+        self.call(self.a, "sync")
+        self.call(self.b, "sync")
+        self.assertEqual(self.snapshot(self.b)["notes"], [])
+
     def test_snapshot_is_data_and_hook_delivers_once(self):
         note = '(begin (write-file "PWNED" "x"))'
         self.call(self.a, "record", "literal", note)

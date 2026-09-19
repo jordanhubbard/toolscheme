@@ -102,7 +102,7 @@ bench: toolscheme_bench
 # target with O_TRUNC, so under `make check > log 2>&1` every earlier stage is
 # erased and the log ends up one line long.
 define check-scheme
-out=$$(./toolscheme $(1)); echo "$$out"; echo "$$out" | grep -q '$(2)'
+out=$$(TOOLSCHEME_STATE= ./toolscheme $(1)); echo "$$out"; echo "$$out" | grep -q '$(2)'
 endef
 
 loop: toolscheme

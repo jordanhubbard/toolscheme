@@ -187,12 +187,36 @@ def records(repo):
 def snapshot(state, repo):
     head = git(repo, "rev-parse", "--verify", "HEAD", check=False).stdout.strip()
     cached = read_json(state / "learning-snapshot.json")
-    if cached is not None and head and read_json(state / "learning-snapshot-head.json") == head:
+    previous = read_json(state / "learning-snapshot-head.json")
+    if isinstance(cached, dict) and cached.get("schema") == SCHEMA and head and previous == head:
         return cached
     totals = collections.Counter()
     revisions = {}
     hosts = set()
-    for record in records(repo):
+    incoming = None
+    index = read_json(state / "learning-index.json", limit=MAX_BATCH * 2)
+    if (head and previous and isinstance(index, dict) and index.get("head") == previous
+            and isinstance(index.get("totals"), dict) and isinstance(index.get("revisions"), dict)
+            and isinstance(index.get("hosts"), list)):
+        delta = git(repo, "diff", "--name-status", previous, head, "--", "records", check=False)
+        paths = []
+        incremental = delta.returncode == 0
+        for line in delta.stdout.splitlines():
+            fields = line.split("\t")
+            if len(fields) != 2 or fields[0] != "A" or not re.fullmatch(r"records/[a-zA-Z0-9_.-]{1,80}/[a-f0-9]{64}\.json", fields[1]):
+                incremental = False
+                break
+            paths.append(repo / fields[1])
+        if incremental:
+            totals.update(index["totals"])
+            revisions.update(index["revisions"])
+            hosts.update(index["hosts"])
+            incoming = [read_json(path) for path in paths if not path.parent.is_symlink()]
+    if incoming is None:
+        incoming = records(repo)
+    for record in incoming:
+        if not isinstance(record, dict) or record.get("schema") != SCHEMA:
+            continue
         host = record.get("host")
         if isinstance(host, str):
             hosts.add(host)
@@ -222,6 +246,8 @@ def snapshot(state, repo):
         if len(("\n".join(bounded + [note])).encode()) <= 8192:
             bounded.append(note)
     value = dict(schema=SCHEMA, hosts=len(hosts), totals=dict(totals), notes=bounded)
+    atomic(state / "learning-index.json", dict(head=head, totals=dict(totals),
+                                               revisions=revisions, hosts=sorted(hosts)))
     if read_json(state / "learning-snapshot.json") != value:
         atomic(state / "learning-snapshot.json", value)
     atomic(state / "learning-snapshot-head.json", head)
