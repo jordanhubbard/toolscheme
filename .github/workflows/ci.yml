@@ -1,0 +1,52 @@
+name: Portable release gates
+on:
+  push:
+    branches: [main, portable-learning-release]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: make test loop learning-test install-test
+      - name: Sanitizers and property fuzzing
+        run: make sanitize fuzz
+      - name: Performance targets
+        run: make bench
+      - name: Package
+        run: make package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolscheme-${{ matrix.os }}
+          path: dist/*
+      - name: Optional DuckDB installation
+        run: make vendor-duckdb && make toolscheme install-test && ./toolscheme tests/sql-check.scm --lib lib
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: portable
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: toolscheme-*
+          path: dist
+          merge-multiple: true
+      - name: Publish tested artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${GITHUB_REF_NAME}" = "v$(cat VERSION.txt)"
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "ToolScheme $GITHUB_REF_NAME" --notes-file docs/release-notes.md

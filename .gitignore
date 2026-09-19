@@ -13,3 +13,5 @@ toolscheme
 vendor/
 
 .build-config
+dist/
+__pycache__/

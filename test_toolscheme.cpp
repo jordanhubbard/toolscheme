@@ -213,7 +213,9 @@ void build_fixture() {
         std::cerr << "FATAL: cannot create a temporary fixture root\n";
         std::exit(2);
     }
-    fixture_root = made;
+    char* canonical_root = ::realpath(made, nullptr);
+    fixture_root = canonical_root ? canonical_root : made;
+    std::free(canonical_root);
     const std::string sub = fixture_root + "/sub";
     if (::mkdir(sub.c_str(), 0755) != 0) {
         std::cerr << "FATAL: cannot create the fixture subdirectory\n";

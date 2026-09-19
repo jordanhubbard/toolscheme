@@ -23,6 +23,7 @@
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -31,7 +32,6 @@
 #include <unistd.h>
 
 #if defined(__linux__)
-#include <sys/statvfs.h>
 #include <sys/sysinfo.h>
 #elif defined(__APPLE__)
 #include <sys/mount.h>
