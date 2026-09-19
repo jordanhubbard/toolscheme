@@ -78,7 +78,8 @@ toolscheme_fuzz: $(SOURCES) $(HEADERS) tests/fuzz_toolscheme.cpp
 	$(CXX) $(SANFLAGS) -I. $(SOURCES) tests/fuzz_toolscheme.cpp -o $@
 
 fuzz: toolscheme_fuzz
-	./toolscheme_fuzz
+	ASAN_OPTIONS=detect_leaks=$(DETECT_LEAKS) \
+	  LSAN_OPTIONS=suppressions=tests/leak-suppressions.txt ./toolscheme_fuzz
 
 toolscheme_bench: $(SOURCES) $(HEADERS) tests/bench_toolscheme.cpp
 	$(CXX) $(CXXFLAGS) -I. $(SOURCES) tests/bench_toolscheme.cpp -o $@
