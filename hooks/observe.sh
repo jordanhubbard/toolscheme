@@ -33,12 +33,23 @@ fi
 STATE="${TOOLSCHEME_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/toolscheme}"
 mkdir -p "$STATE" 2>/dev/null || exit 0
 
+# Classifying a stall needs an HTTPS call, which here means curl, which means the
+# process capability. It is granted only when classification is switched on, so
+# the ordinary observing hook keeps no ability to run anything at all. The URL
+# comes from the environment and never from the transcript being judged.
+NET=""
+case "$(. "$STATE/config" 2>/dev/null; echo "${TOOLSCHEME_CLASSIFY:-0}")" in
+  1|true|yes|on) NET="--allow-process --allow-program curl" ;;
+esac
+[ "${TOOLSCHEME_CLASSIFY:-}" = "1" ] && NET="--allow-process --allow-program curl"
+
 TOOLSCHEME_BINARY="$BIN" \
 TOOLSCHEME_HOOKS="$HOME_DIR/hooks" \
 TOOLSCHEME_LIB="$HOME_DIR/lib" \
 "$BIN" "$HOME_DIR/hooks/observe.scm" \
   --root "$STATE" \
   --lib "$HOME_DIR/lib" \
+  $NET \
   --stdin --text --quiet 2>/dev/null
 
 exit 0

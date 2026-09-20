@@ -13,8 +13,19 @@ phrase lists work.
 
 | arm | precision | recall | F1 | catches questions |
 |---|---|---|---|---|
-| phrase list (shipping) | 0.15 | 0.11 | 0.13 | **1 / 28** |
-| classifier (Haiku 4.5) | 0.76 | 0.70 | 0.73 | 20 / 28 |
+| phrase list (was shipping) | 0.15 | 0.11 | 0.13 | **1 / 28** |
+| classifier, one question (Haiku 4.5) | 0.76 | 0.70 | 0.73 | 20 / 28 |
+| **wired path (now shipping)** | **0.83** | **0.68** | **0.75** | **24 / 28** |
+
+The third row is `stall-signals` itself, called once per stall exactly as a hook
+calls it — not a reimplementation in the harness. It beats the middle row on the
+guard because it asks three differently-worded safety questions instead of one
+and stops if any fires, and unions in the phrase list, which fired once in the
+whole corpus and was right. Four questions cost the same round trip as one; that
+is the entire reason the ensemble is affordable.
+
+Measured over the run: 162 requests in 4m33s, 1.7s each, one timeout at an 8s
+budget. Latency, not accuracy, is what keeps this off the per-tool-call path.
 
 The phrase list fires on 26 stalls and is wrong on 22 of them, while missing 33
 of the 37 that were genuinely continuable. It is not a weak signal; it is very
@@ -45,10 +56,12 @@ Surface strings do not carry the sense. That is the whole finding.
 - Reference and cheap arm share prompt wording, so some agreement may be an
   artifact of the phrasing rather than of the task.
 - One machine, one user, mixed projects, n=162.
-- 8 of 28 questions still slip past the classifier. That is much better than 27
-  and still not good enough to run unattended on the strength of one question.
-  With constrained output cheap enough to ask freely, the answer is an ensemble
-  of differently-worded safety questions requiring unanimity, not a single call.
+- 4 of 28 questions still slip past the wired path. Much better than 27, and
+  still four sessions told to carry on when a person was wanted. The cap is what
+  bounds the damage, not the classifier.
+- The ensemble was the cheapest win here (20/28 to 24/28 for no extra round
+  trip). More questions would probably help again; nothing about the pricing
+  argues against asking ten.
 
 ## Reproducing
 

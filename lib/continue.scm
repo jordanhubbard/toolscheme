@@ -81,15 +81,18 @@
   (let* ((session (field-ref request "session_id" ""))
          (message (field-ref request "last_assistant_message" ""))
          (keys (session-keys session))
-         (used (continuations-so-far keys session)))
+         (used (continuations-so-far keys session))
+         ;; Classified when that is switched on, phrase lists otherwise. The
+         ;; difference is large enough to matter: see [[classify]].
+         (signals (if (string? message) (stall-signals message) '())))
     (cond
       ((not (continue-enabled?)) #f)
       ((not (string? message)) #f)
       ((string-null? (string-trim message)) #f)
       ;; The agent is asking, not reporting.
-      ((asks-a-question? message) #f)
+      ((field-ref signals 'asks-question #f) #f)
       ;; No stated next step is no mandate to invent one.
-      ((not (names-a-next-step? message)) #f)
+      ((not (field-ref signals 'names-next-step #f)) #f)
       ;; Bounded, so a loop ends by arithmetic rather than by someone noticing.
       ((>= used (continue-cap)) #f)
       (else

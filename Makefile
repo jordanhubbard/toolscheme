@@ -116,6 +116,7 @@ loop: toolscheme
 	@$(call check-scheme,tests/sql-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/continue-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/codex-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/classify-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/proven-check.scm --lib lib --allow-process \
 	  --allow-program sh --allow-program grep --allow-program head,(checks-hold #t))
 	@$(call check-scheme,tests/synthesis-check.scm --lib lib,(checks-hold #t))

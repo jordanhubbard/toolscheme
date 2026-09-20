@@ -107,6 +107,9 @@
 
 ;; The whole decision, with nothing in it that touches the world, so the guards
 ;; can be tested without a live session. #f means leave the thread alone.
+;; The cheap guards are checked before the message is read at all, so a scan
+;; over every thread on the machine costs one request per genuine candidate
+;; rather than one per file.
 (define (codex-continue-decision role message idle used cap)
   (cond
     ((not (equal? role "assistant")) #f)
@@ -116,11 +119,16 @@
     ;; than waiting.
     ((< idle (codex-idle-seconds)) #f)
     ((> idle (codex-stale-seconds)) #f)
-    ;; A question is the one case that genuinely wants a person.
-    ((asks-a-question? message) #f)
-    ((not (names-a-next-step? message)) #f)
     ((>= used cap) #f)
-    (else (codex-continuation-text used cap))))
+    (else (codex-message-decision message used cap))))
+
+(define (codex-message-decision message used cap)
+  (let ((signals (stall-signals message)))
+    (cond
+      ;; A question is the one case that genuinely wants a person.
+      ((field-ref signals 'asks-question #f) #f)
+      ((not (field-ref signals 'names-next-step #f)) #f)
+      (else (codex-continuation-text used cap)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; The scan. Everything below touches the world.

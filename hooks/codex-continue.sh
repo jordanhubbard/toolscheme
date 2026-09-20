@@ -37,7 +37,7 @@ TOOLSCHEME_LIB="$HOME_DIR/lib" \
 "$BIN" "$HOME_DIR/hooks/codex-continue.scm" \
   --root "$SESSIONS" \
   --lib "$HOME_DIR/lib" \
-  --allow-process --allow-program codex \
+  --allow-process --allow-program codex --allow-program curl \
   --text 2>/dev/null
 
 exit 0

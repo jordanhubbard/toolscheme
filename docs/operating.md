@@ -198,13 +198,40 @@ Measured across 30 Codex sessions: 34.5 hours idle waiting for a human, against
 behalf; both decline to stop when the agent has already said what it would do
 next, and both refuse the moment a question is in the message.
 
-**How well they refuse is measured, and the answer is: badly.** Over 162
-independently labelled stalls the phrase lists score precision 0.15 and recall
-0.11, and catch 1 of the 28 messages that ask the user something. A cheap
-classifier over the same corpus scores 0.76 / 0.70 and catches 20. The lists
-survive because they need no network inside a hook, not because they work well;
-see `experiments/stall-classifier`. Treat the cap as the real safeguard, and
-leave this off unless you are watching.
+**How well they refuse is measured.** Over 162 independently labelled stalls:
+
+| | precision | recall | catches questions |
+|---|---|---|---|
+| phrase lists | 0.15 | 0.11 | 1 / 28 |
+| with `TOOLSCHEME_CLASSIFY=1` | 0.83 | 0.68 | 24 / 28 |
+
+The lists alone are close to no signal. They remain the default because they
+need no network and no credential on a hook path, not because they work; see
+`experiments/stall-classifier`.
+
+### Classification
+
+```
+TOOLSCHEME_CLASSIFY=1                     # ask a model instead of matching strings
+TOOLSCHEME_CLASSIFY_MODEL=...             # default: azure/anthropic/claude-haiku-4-5
+TOOLSCHEME_CLASSIFY_TIMEOUT_MS=3000
+NVIDIA_INFERENCE_API_KEY=...              # or ANTHROPIC_API_KEY
+```
+
+Four questions in one round trip: one for the decision, three differently-worded
+guards, any of which stops it. Measured at 1.7s per call, which is why this is
+on the turn-end path and not on every tool call.
+
+Two behaviours worth knowing before turning it on. The hook gains the process
+capability so it can run `curl` — only when this is set, and the URL comes from
+the environment, never from the transcript being judged. And if the call fails,
+times out, or the credential is missing, **nothing continues**: it does not fall
+back to the phrase lists, because taking an action on a 0.15-precision signal
+silently, at the moment something is already wrong, is worse than leaving a
+session idle.
+
+Still leave it off unless you are watching: 4 of 28 questions get past it, and
+the cap is what bounds that.
 
 Off unless asked for:
 
