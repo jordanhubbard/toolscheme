@@ -1,0 +1,15 @@
+;;; Run the shipping phrase-list predicates over the real stall corpus.
+(let* ((raw (field-ref (read-file "corpus.jsonl" '((limit 8388608))) 'text ""))
+       (lines (filter (lambda (l) (not (string-null? l)))
+                      (field-ref (text-lines raw) 'lines))))
+  (string-join
+    (map (lambda (line)
+           (let* ((parsed (json-parse line))
+                  (row (field-ref parsed 'value))
+                  (message (field-ref row "message" ""))
+                  (names (names-a-next-step? message))
+                  (asks (asks-a-question? message)))
+             (string-append (if names "1" "0") "\t" (if asks "1" "0")
+                            "\t" (if (and names (not asks)) "1" "0"))))
+         lines)
+    "\n"))

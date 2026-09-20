@@ -4,12 +4,23 @@
 ;;; them in gaps short enough to be worth recovering, against 2.7 hours asleep on a
 ;;; timer. Idle is twelve times the problem `wait-for` was built for.
 ;;;
-;;; The obvious reading of that is wrong, and the data says so. Of 141 such stalls,
-;;; 2 ended with a question or an offer to proceed. The other 139 ended with a
-;;; completion summary that named the next step -- "Full borrow task718 remains
-;;; open. Next required slice: nested resource projections" -- and stopped anyway.
-;;; So this does not auto-approve decisions. It declines to stop when the agent has
-;;; already said what it would do next.
+;;; This does not auto-approve decisions. It declines to stop when the agent has
+;;; already said what it would do next -- "Full borrow task718 remains open. Next
+;;; required slice: nested resource projections" -- which is what most stalls
+;;; look like.
+;;;
+;;; An earlier version of this comment claimed 2 of 141 stalls ended in a
+;;; question. That number came from `asks-a-question?` below, so it was a
+;;; measurement of the detector rather than of the corpus, and it was wrong.
+;;; Labelled independently over 162 stalls, 28 of them ask something, and these
+;;; phrase lists find one: precision 0.15 and recall 0.11 on the decision, 1 of
+;;; 28 on the guard. A cheap classifier over the same corpus scores 0.76 / 0.70
+;;; and catches 20. See experiments/stall-classifier.
+;;;
+;;; The lists are kept because they need no network and no credential on a path
+;;; that runs inside a hook, and because something auditable should remain when
+;;; the classifier is unreachable. They are not good enough to justify raising
+;;; the cap or turning this on by default.
 ;;;
 ;;; This is the most dangerous thing in this project, because an agent that never
 ;;; stops has no natural place left to check its own work. Every guard below exists

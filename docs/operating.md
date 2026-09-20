@@ -194,11 +194,17 @@ instructions cannot be edited.
 ## Continuing a session that stalled
 
 Measured across 30 Codex sessions: 34.5 hours idle waiting for a human, against
-2.7 hours asleep on a timer. Of 141 such stalls, **2** ended with a question. The
-other 139 ended with a completion summary that named the next step and stopped
-anyway. So neither mechanism below approves a decision on your behalf; both
-decline to stop when the agent has already said what it would do next, and both
-refuse the moment a question is in the message.
+2.7 hours asleep on a timer. Neither mechanism below approves a decision on your
+behalf; both decline to stop when the agent has already said what it would do
+next, and both refuse the moment a question is in the message.
+
+**How well they refuse is measured, and the answer is: badly.** Over 162
+independently labelled stalls the phrase lists score precision 0.15 and recall
+0.11, and catch 1 of the 28 messages that ask the user something. A cheap
+classifier over the same corpus scores 0.76 / 0.70 and catches 20. The lists
+survive because they need no network inside a hook, not because they work well;
+see `experiments/stall-classifier`. Treat the cap as the real safeguard, and
+leave this off unless you are watching.
 
 Off unless asked for:
 
