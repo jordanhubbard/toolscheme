@@ -27,6 +27,46 @@ is the entire reason the ensemble is affordable.
 Measured over the run: 162 requests in 4m33s, 1.7s each, one timeout at an 8s
 budget. Latency, not accuracy, is what keeps this off the per-tool-call path.
 
+## Von, measured: much faster, much worse at this
+
+Von 1.0 (395M, run locally on a GB10, same `/v1/systemone` wire API) answered
+all four questions in **93ms at p50 and 147ms at p95**, against 1.7s for the
+chat backend — the whole corpus in 16s instead of 4m33s, on this machine, with
+no credential and nothing leaving it.
+
+It is not usable for this decision:
+
+| | precision | recall | F1 | catches questions |
+|---|---|---|---|---|
+| chat backend (Haiku 4.5) | 0.83 | 0.68 | 0.75 | 24 / 28 |
+| Von, shipped thresholds | 0.00 | 0.00 | 0.00 | 26 / 28 |
+| Von, best of 60 threshold/guard combinations | 0.24 | 0.92 | **0.38** | 12 / 28 |
+
+The first Von row is not its fault. `needs_choice` — "would carrying on require
+choosing between alternatives the message leaves open?" — came back ≥0.3 on 153
+of 162 messages, median 0.992. It is very nearly a tautology for any agent about
+to continue, and Von answers it literally where a chat model answered it
+charitably. Ambiguity in a question is invisible until something takes it at its
+word.
+
+The third row is the real finding, and rewording did not move it.
+`names_next_step` is saturated: p10 0.56, p50 0.96, p90 1.00. Von says a next
+step is named for nearly every message in the corpus, so there is no threshold
+that separates the 37 continuable stalls from the other 125. A second wording
+("describe work still unfinished and about to be done next") produced p50 0.95
+and the same 0.38.
+
+**Confound, stated plainly:** the reference labels come from Opus 5 and the chat
+arm is Haiku 4.5 — the same family, so some of 0.75-vs-0.38 is likely agreement
+between relatives rather than truth. It would take human labels to separate
+those, and this corpus has none.
+
+So the chat backend stays the default. Von stays wired, because the gap is in
+one saturated question and not in the transport, and because 93ms is in reach of
+decisions the chat path is too slow to make at all — the per-tool-call ones this
+project actually cares about. A frontier System One model may also behave
+differently from a days-old 395M one; nothing here measures Jev.
+
 The phrase list fires on 26 stalls and is wrong on 22 of them, while missing 33
 of the 37 that were genuinely continuable. It is not a weak signal; it is very
 nearly no signal. And the guard I called the one that must never regress --
