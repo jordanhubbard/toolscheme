@@ -22,6 +22,30 @@
 
 (define chatty "Sure! Here you go: {\"names_next_step\":true} -- hope that helps.")
 
+;;; The typed backend. These bodies are the published /v1/systemone response
+;;; shape, which Jev, Von and OpenJev all answer in; parsing them is checked
+;;; here because the live call cannot be.
+
+;; The parser is exercised directly rather than through the backend switch, so
+;; these checks do not depend on environment set half way through a test file.
+(define (answered body) (systemone-answer (list (list 'body body))))
+
+(define confident
+  "{\"model\":\"von-1.0.0\",\"answers\":{\"names_next_step\":{\"type\":\"noul\",\"noul\":0.95},\"asks_question\":{\"type\":\"noul\",\"noul\":0.02},\"awaits_human\":{\"type\":\"noul\",\"noul\":0.04},\"needs_choice\":{\"type\":\"noul\",\"noul\":0.01}},\"usage\":{\"input_tokens\":304}}")
+
+;; 0.35 is nowhere near sure that a question was asked, and it still stops.
+;; That is the asymmetry the thresholds exist for.
+(define faint-suspicion
+  "{\"answers\":{\"names_next_step\":{\"type\":\"noul\",\"noul\":0.91},\"asks_question\":{\"type\":\"noul\",\"noul\":0.35},\"awaits_human\":{\"type\":\"noul\",\"noul\":0.02},\"needs_choice\":{\"type\":\"noul\",\"noul\":0.01}}}")
+
+;; And the same number in the other direction is not enough to act on.
+(define lukewarm
+  "{\"answers\":{\"names_next_step\":{\"type\":\"noul\",\"noul\":0.62},\"asks_question\":{\"type\":\"noul\",\"noul\":0.01},\"awaits_human\":{\"type\":\"noul\",\"noul\":0.01},\"needs_choice\":{\"type\":\"noul\",\"noul\":0.01}}}")
+
+(define truncated "{\"answers\":{\"names_next_step\":{\"type\":\"noul\",\"noul\":0.99}}}")
+
+(define (says body key) (field-ref (answered body) key #f))
+
 (define checks
   (list
     (list 'clear-answer-does-not-block (not (classify-blocked? clear)))
@@ -34,7 +58,16 @@
     ;; Off: the lists decide, and they are weak but auditable.
     (list 'disabled-uses-the-lists (source-of "Next: ship it."))
     (list 'disabled-still-decides (continues? "Next: ship it."))
-    (list 'classification-off-by-default (not (classify-enabled?)))))
+    (list 'classification-off-by-default (not (classify-enabled?)))
+    ;; The chat backend stays the default; the typed one is asked for.
+    (list 'chat-backend-by-default (not (classify-systemone?)))
+    (list 'confident-answer-continues (says confident "names_next_step"))
+    (list 'confident-answer-is-unblocked (not (classify-blocked? (answered confident))))
+    (list 'faint-suspicion-still-blocks (classify-blocked? (answered faint-suspicion)))
+    (list 'lukewarm-go-ahead-refused (not (says lukewarm "names_next_step")))
+    (list 'lukewarm-is-otherwise-clear (not (classify-blocked? (answered lukewarm))))
+    ;; Missing guards in a truncated reply must read as blocked, not as consent.
+    (list 'truncated-reply-blocks (classify-blocked? (answered truncated)))))
 
 (list (list 'checks checks)
       (list 'checks-hold
@@ -45,6 +78,12 @@
                  (not (classify-blocked? partial))
                  (= (last-brace chatty) 43)
                  (not (last-brace "no object here"))
-                 (equal? (source-of "Next: ship it.") "phrases")
-                 (continues? "Next: ship it.")
-                 (not (classify-enabled?)))))
+                 (not (classify-systemone?))
+                 (says confident "names_next_step")
+                 (not (classify-blocked? (answered confident)))
+                 ;; The two that encode the asymmetry.
+                 (classify-blocked? (answered faint-suspicion))
+                 (not (says lukewarm "names_next_step"))
+                 (not (classify-blocked? (answered lukewarm)))
+                 ;; The one that must never invert.
+                 (classify-blocked? (answered truncated)))))

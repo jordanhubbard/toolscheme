@@ -21,14 +21,45 @@
 ;;; One model -- constrained outputs, flat latency in the number of questions --
 ;;; drops in by setting TOOLSCHEME_CLASSIFY_MODEL and nothing else.
 
-(define classify-endpoint
+;; Two shapes of the same request. A chat model must be talked out of prose and
+;; into an object; a System One model is asked typed questions and cannot answer
+;; with anything else. The second is what this decision actually is, so it gets
+;; its own path rather than being squeezed through the first.
+;;
+;; "systemone" is one wire API with several implementations: TypeSafe's hosted
+;; Jev, and the open ones that copy its endpoint verbatim -- Von (395M, runs
+;; locally, ~18ms on a GPU and ~480ms on CPU) and OpenJev (26B, wants 24GB).
+;; Picking between them is an endpoint, not a code change.
+(define (classify-backend)
+  (let ((configured (setting "TOOLSCHEME_CLASSIFY_BACKEND")))
+    (if (and (string? configured) (string=? configured "systemone"))
+        "systemone"
+        "messages")))
+
+(define (classify-systemone?) (string=? (classify-backend) "systemone"))
+
+(define (classify-endpoint)
   (or (env-value "TOOLSCHEME_CLASSIFY_ENDPOINT")
-      "https://inference-api.nvidia.com/v1/messages"))
+      (if (classify-systemone?)
+          "https://api.typesafe.ai/v1/systemone"
+          "https://inference-api.nvidia.com/v1/messages")))
 
 ;; Cheap on purpose. This runs on a hook path, and the measurement that
 ;; justified it was taken with exactly this model.
-(define classify-model
-  (or (env-value "TOOLSCHEME_CLASSIFY_MODEL") "azure/anthropic/claude-haiku-4-5"))
+(define (classify-model)
+  (or (env-value "TOOLSCHEME_CLASSIFY_MODEL")
+      (if (classify-systemone?) "jev-latest" "azure/anthropic/claude-haiku-4-5")))
+
+;; A locally served model needs no credential at all, which is the point of
+;; running one: nothing about this decision then leaves the machine.
+(define (classify-credential)
+  (if (classify-systemone?)
+      (let ((key (env-value "TYPESAFE_API_KEY")))
+        (if key
+            (list (list 'header "authorization")
+                  (list 'value (string-append "Bearer " key)))
+            (list (list 'header "content-type") (list 'value "application/json"))))
+      (synthesis-credential)))
 
 ;; A hook that hangs breaks the session it is meant to help, so the budget is
 ;; well inside the handler timeout and a miss falls back rather than failing.
@@ -40,6 +71,22 @@
         (let ((n (string->number configured)))
           (if (number? n) n classify-default-timeout-ms))
         classify-default-timeout-ms)))
+
+;; A noul comes back as a probability, and the two directions are not equally
+;; expensive: a false stop leaves a session idle, a false start hands an
+;; unattended agent work nobody asked for. So a guard trips on weak suspicion
+;; while the go-ahead needs real confidence. A model answering true or false
+;; cannot express that asymmetry at all; this is the reason to prefer the typed
+;; backend beyond its speed.
+(define (classify-threshold name fallback)
+  (let ((configured (setting name)))
+    (if (string? configured)
+        (let ((n (string->number configured)))
+          (if (number? n) n fallback))
+        fallback)))
+
+(define (classify-block-at) (classify-threshold "TOOLSCHEME_CLASSIFY_BLOCK_AT" 0.3))
+(define (classify-continue-at) (classify-threshold "TOOLSCHEME_CLASSIFY_CONTINUE_AT" 0.7))
 
 ;; Explicit rather than "on when a credential happens to exist", so that whether
 ;; a hook talks to the network is a decision someone made and can find again.
@@ -76,7 +123,44 @@
 ;; so that a transcript telling the model what to answer reads as part of the
 ;; specimen.
 (define (classify-request message)
-  (list (list "model" classify-model)
+  (if (classify-systemone?) (systemone-request message) (messages-request message)))
+
+;; The same four questions, typed. A noul is answered as a probability rather
+;; than a word, which is the difference that matters here: see the thresholds
+;; above for why one direction is allowed to be cheap and the other is not.
+(define (noul instructions when-true when-false)
+  (list (list "type" "noul")
+        (list "instructions" instructions)
+        (list "criteria" (list (list "true" when-true) (list "false" when-false)))))
+
+(define systemone-questions
+  (list
+    (list "names_next_step"
+          (noul "Does the message state a specific next action on the task that the agent itself could carry out with no decision from a human?"
+                "A concrete next action on the task, needing nobody"
+                "A sign-off, a finished report, or work for the human to do"))
+    (list "asks_question"
+          (noul "Does the message ask the human anything, or request a decision, approval, preference, or clarification?"
+                "Anything is asked of the human"
+                "Nothing is asked of the human"))
+    (list "awaits_human"
+          (noul "Does the message say it is waiting on a person, a review, an approval, or an external party before it can proceed?"
+                "Blocked on someone or something outside the agent"
+                "Not waiting on anyone"))
+    (list "needs_choice"
+          (noul "Would carrying on require choosing between alternatives the message leaves open?"
+                "An open choice is left unmade"
+                "No choice is left open"))))
+
+;; State is the message itself. Every question is asked in the one request,
+;; because the round trip is the cost and the questions are not.
+(define (systemone-request message)
+  (list (list "model" (classify-model))
+        (list "state" message)
+        (list "questions" systemone-questions)))
+
+(define (messages-request message)
+  (list (list "model" (classify-model))
         (list "max_tokens" 200)
         (list "messages"
               (list (list (list "role" "user")
@@ -95,6 +179,35 @@
           (else (loop (- i 1))))))
 
 (define (classify-answer response)
+  (if (classify-systemone?) (systemone-answer response) (messages-answer response)))
+
+;; Probabilities in, booleans out, so both backends hand `classify-blocked?` the
+;; same thing. A missing answer reads as "asked" on a guard and "no" on the
+;; go-ahead: whichever way the reply is incomplete, the session is left alone.
+(define (noul-of answers name)
+  (let ((answer (field-ref answers name #f)))
+    (if (list? answer) (field-ref answer "noul" #f) #f)))
+
+(define (guard-tripped? answers name)
+  (let ((p (noul-of answers name)))
+    (if (number? p) (>= p (classify-block-at)) #t)))
+
+(define (systemone-answer response)
+  (let ((parsed (json-parse (field-ref response 'body ""))))
+    (if (error? parsed)
+        parsed
+        (let* ((body (field-ref parsed 'value))
+               (answers (field-ref body "answers" #f)))
+          (if (not (list? answers))
+              (list (list 'error "no answers in the reply") (list 'code 'malformed))
+              (let ((go (noul-of answers "names_next_step")))
+                (list (list "names_next_step"
+                            (and (number? go) (>= go (classify-continue-at))))
+                      (list "asks_question" (guard-tripped? answers "asks_question"))
+                      (list "awaits_human" (guard-tripped? answers "awaits_human"))
+                      (list "needs_choice" (guard-tripped? answers "needs_choice")))))))))
+
+(define (messages-answer response)
   (let ((parsed (json-parse (field-ref response 'body ""))))
     (if (error? parsed)
         parsed
@@ -113,14 +226,14 @@
                       (if (error? object) object (field-ref object 'value))))))))))
 
 (define (classify-stall message)
-  (let ((credential (synthesis-credential)))
+  (let ((credential (classify-credential)))
     (if (not credential)
         (list (list 'error "no credential") (list 'code 'capability-missing))
         (let* ((body (field-ref (json-write (classify-request message)) 'text))
                (response (catch-errors
                            (lambda ()
                              (http-request
-                               (list (list 'url classify-endpoint)
+                               (list (list 'url (classify-endpoint))
                                      (list 'method "POST")
                                      (list 'timeout-ms (classify-timeout-ms))
                                      (list 'headers

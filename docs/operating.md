@@ -222,6 +222,43 @@ Four questions in one round trip: one for the decision, three differently-worded
 guards, any of which stops it. Measured at 1.7s per call, which is why this is
 on the turn-end path and not on every tool call.
 
+#### Typed backends (System One)
+
+A chat model has to be talked out of prose and into an object. A System One
+model is asked typed questions and cannot answer with anything else, returns a
+probability rather than a word, and is far faster. One wire API, several
+implementations:
+
+```
+TOOLSCHEME_CLASSIFY_BACKEND=systemone
+TOOLSCHEME_CLASSIFY_ENDPOINT=http://127.0.0.1:8000/v1/systemone   # a local server
+TOOLSCHEME_CLASSIFY_MODEL=von-1.0.0
+TYPESAFE_API_KEY=...                      # only for the hosted one
+```
+
+| implementation | where | size | latency |
+|---|---|---|---|
+| TypeSafe Jev | hosted, `api.typesafe.ai` | — | ~200 ms |
+| Von | local, `von serve` | 395M / 1.5 GB | ~18 ms GPU, ~480 ms CPU |
+| OpenJev | local, needs a 24 GB GPU | 26B | ~94 ms |
+
+Local means no credential and nothing about the decision leaving the machine.
+
+The probability is the reason to prefer this beyond speed. A false stop leaves a
+session idle; a false start hands an unattended agent work nobody asked for.
+Those are not equally expensive, so a guard trips at `0.3` while the go-ahead
+needs `0.7`:
+
+```
+TOOLSCHEME_CLASSIFY_BLOCK_AT=0.3
+TOOLSCHEME_CLASSIFY_CONTINUE_AT=0.7
+```
+
+A true/false answer cannot express that asymmetry at all. **Not yet measured
+against the corpus** — the request and response handling are checked against the
+published contract in `tests/classify-check.scm`, but no accuracy number here is
+from a running System One model.
+
 Two behaviours worth knowing before turning it on. The hook gains the process
 capability so it can run `curl` — only when this is set, and the URL comes from
 the environment, never from the transcript being judged. And if the call fails,
