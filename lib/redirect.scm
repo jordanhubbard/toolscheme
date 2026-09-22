@@ -111,7 +111,11 @@
     (if (string-null? text)
         #f
         (let ((tool (tool-for-command text)))
-          (if (not tool)
+          ;; Proven *and* worth it. The evidence clauses above say a rewrite
+          ;; would be faithful; this one says it would be worth taking, because a
+          ;; silent substitution on a call that prints nothing buys nothing and
+          ;; risks the same as one that prints a screenful.
+          (if (or (not tool) (not (worth-redirecting? text)))
               #f
               (list (list "hookSpecificOutput"
                           (list (list "hookEventName" "PreToolUse")
@@ -185,6 +189,114 @@
                           (list "updatedInput"
                                 (append input (list (list "limit" limit))))))))))
 
+;;; ---------------------------------------------------------------------------
+;;; What a command is about to print.
+;;;
+;;; A rewrite is a silent change to what the agent is told about the world, so it
+;;; is not worth the risk on a call that was going to print two hundred bytes.
+;;; This answers how much a command is likely to return, and it is the cheapest
+;;; useful predictor measured by a distance.
+;;;
+;;; Over 3,560 distinct commands from this machine's own transcripts, labelled
+;;; with the output size actually recorded rather than with a model's opinion, a
+;;; lookup keyed on the program name scores F1 0.57 against 2KB. The fastest
+;;; local classifier measured scored 0.37 on the same corpus and guessing scores
+;;; 0.35; handing the classifier only the programs the table had never seen
+;;; changed nothing to two decimal places. See experiments/output-size.
+;;;
+;;; The aggregate is kept in its own small file rather than derived from the
+;;; observation log. That log grows by around 20MB a day and this is consulted
+;;; before every call: a predictor that has to read the corpus to answer is not a
+;;; cheap predictor. One row per program keeps both the read and the write
+;;; proportional to the number of distinct programs, which is dozens.
+
+(define memo-path "memo/output-bytes")
+
+;; Two hooks finishing at once can lose one update here. That is acceptable for a
+;; running average over thousands of calls and would not be for anything that had
+;; to be exact.
+(define (memo-rows)
+  (let ((read (catch-errors (lambda () (read-file memo-path '((limit 65536)))))))
+    (if (error? read)
+        '()
+        (fold-left
+          (lambda (rows line)
+            (let ((parts (string-split line "\t")))
+              (if (< (length parts) 3)
+                  rows
+                  (let ((count (string->number (list-ref parts 2)))
+                        (total (string->number (list-ref parts 3))))
+                    (if (and (number? count) (number? total))
+                        (cons (list (list-ref parts 1) count total) rows)
+                        rows)))))
+          '()
+          (field-ref (text-lines (field-ref read 'text "")) 'lines)))))
+
+(define (memo-write rows)
+  (let* ((text (string-join
+                 (map (lambda (row)
+                        (string-append (car row) "\t"
+                                       (number->string (car (cdr row))) "\t"
+                                       (number->string (car (cdr (cdr row))))))
+                      rows)
+                 "\n"))
+         (write-once (lambda () (write-file memo-path (string-append text "\n")))))
+    (if (error? (catch-errors write-once))
+        (begin (catch-errors (lambda () (mkdir "memo" '((parents #t)))))
+               (catch-errors write-once))
+        #t)))
+
+(define (command-program text)
+  (let ((parsed (catch-errors (lambda () (shell-parse text)))))
+    (if (error? parsed)
+        ""
+        (let ((programs (field-ref parsed 'programs '())))
+          (if (pair? programs) (car programs) "")))))
+
+(define (remember-output! text bytes)
+  (let ((program (command-program text)))
+    (if (or (string-null? program) (not (number? bytes)))
+        #f
+        (let* ((rows (memo-rows))
+               (seen (any? (lambda (row) (equal? (car row) program)) rows))
+               (updated
+                 (if seen
+                     (map (lambda (row)
+                            (if (equal? (car row) program)
+                                (list program (+ (car (cdr row)) 1)
+                                      (+ (car (cdr (cdr row))) bytes))
+                                row))
+                          rows)
+                     (cons (list program 1 bytes) rows))))
+          (memo-write updated)))))
+
+;; #f means "never seen this program", which is different from "seen, and small".
+;; Treating the two alike would let an unknown command inherit whatever the
+;; default happened to be.
+(define (predicted-output-bytes text)
+  (let* ((program (command-program text))
+         (row (if (string-null? program)
+                  #f
+                  (fold-left (lambda (found r) (if (equal? (car r) program) r found))
+                             #f (memo-rows)))))
+    (if (not row) #f (quotient (car (cdr (cdr row))) (max 1 (car (cdr row)))))))
+
+(define redirect-default-min-bytes 2000)
+
+(define (redirect-min-bytes)
+  (let ((configured (setting "TOOLSCHEME_REDIRECT_MIN_BYTES")))
+    (if (string? configured)
+        (let ((n (string->number configured)))
+          (if (number? n) n redirect-default-min-bytes))
+        redirect-default-min-bytes)))
+
+;; An unseen program is not rewritten. The evidence a rewrite rests on is about
+;; the shape being reproducible; this is about it being worth doing at all, and
+;; there is no evidence either way the first time something runs.
+(define (worth-redirecting? text)
+  (let ((predicted (predicted-output-bytes text)))
+    (and (number? predicted) (>= predicted (redirect-min-bytes)))))
+
 (define (hook-decision request)
   (let ((event (field-ref request "hook_event_name" "")))
     (cond ((equal? event "SessionStart") (session-decision request))
@@ -218,6 +330,18 @@
         (begin
           (catch-errors
             (lambda () (if (null? request) #f (hook-append (hook-observation request)))))
+          ;; A finished call is the only place the output size is known, so the
+          ;; table is fed here and read on the way in to the next one.
+          (catch-errors
+            (lambda ()
+              (if (equal? (field-ref request "hook_event_name" "") "PostToolUse")
+                  (let ((input (field-ref request "tool_input" '()))
+                        (response (field-ref request "tool_response" #f)))
+                    (remember-output! (hook-command-of input)
+                                      (if (absent? response)
+                                          0
+                                          (string-length (write-to-string response)))))
+                  #f)))
           (let ((decision (catch-errors (lambda () (hook-decision request)))))
             (if (or (error? decision) (not decision))
                 ""

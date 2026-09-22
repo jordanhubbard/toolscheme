@@ -111,7 +111,9 @@ loop: toolscheme
 	@$(call check-scheme,tests/hook-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/tools-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
-	@$(call check-scheme,tests/redirect-check.scm --lib lib,(checks-hold #t))
+	@rm -rf .check-root && mkdir -p .check-root
+	@$(call check-scheme,tests/redirect-check.scm --lib lib --root .check-root,(checks-hold #t))
+	@rm -rf .check-root
 	@$(call check-scheme,tests/steer-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/sql-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/continue-check.scm --lib lib,(checks-hold #t))

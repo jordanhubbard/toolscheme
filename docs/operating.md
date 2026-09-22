@@ -186,6 +186,26 @@ Redirection replaces the call, and is allowed only for a command shape a publish
 tool has been proven to reproduce byte for byte, exit status included, *and* to
 beat on time. Nothing currently claims that, so nothing is rewritten.
 
+A rewrite must also be **worth** taking. A silent substitution on a call that was
+going to print two hundred bytes buys nothing and risks what a useful one risks,
+so the hook keeps a running average of what each program returns and skips the
+rewrite below a floor:
+
+```
+TOOLSCHEME_REDIRECT_MIN_BYTES=2000   # default
+```
+
+A program the table has never seen is left alone — there is no evidence either
+way the first time something runs. The table lives in `memo/output-bytes`, one
+row per program, written when a call finishes and read before the next one
+starts; it is deliberately not derived from the observation log, which grows by
+tens of megabytes a day and would make this the most expensive part of the hook.
+
+That table is also the best predictor of output size measured here: over 3,560
+distinct commands labelled with their recorded output, it scores F1 **0.57**,
+against 0.37 for the fastest local classifier tried and 0.35 for guessing. See
+`experiments/output-size`.
+
 Measured, a one-line note in the agent's own instructions (`CLAUDE.md`,
 `AGENTS.md`) beats the per-call hook: it prevents the behaviour rather than
 correcting it after the fact. Put the note there first; the hook is for where
