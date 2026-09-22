@@ -6308,6 +6308,45 @@ void register_shell_parsing(Interpreter& interpreter) {
                 kernel.pop_back();
             out.field("kernel", kernel);
         }
+        // What kind of model this host could run locally at all. Read from the
+        // filesystem rather than by shelling out to nvidia-smi, so it stays
+        // available to a tool holding no process capability -- which is the
+        // situation every hook is in.
+        //
+        // This answers "what is feasible here", and nothing more. It is not a
+        // way to choose a model: which one is actually better at a given
+        // decision is a question for a corpus, not for the hardware.
+        std::string accelerator = "none";
+#if defined(__APPLE__)
+        accelerator = "apple";
+#elif defined(__linux__)
+        // Every probe here is an fopen, so this file keeps to the standard
+        // library and the rest of the tree keeps its one POSIX boundary. The
+        // vendor is all that is wanted: the GPU's marketing name would need
+        // directory enumeration and answers no question this asks.
+        if (std::FILE* driver = std::fopen("/proc/driver/nvidia/version", "rb")) {
+            std::fclose(driver);
+            accelerator = "nvidia";
+        } else {
+            // No NVIDIA driver: read the PCI vendor of each render node instead.
+            for (int card = 0; card < 8 && accelerator == "none"; ++card) {
+                const std::string path =
+                    "/sys/class/drm/card" + std::to_string(card) + "/device/vendor";
+                if (std::FILE* handle = std::fopen(path.c_str(), "rb")) {
+                    char buffer[32] = {};
+                    const std::size_t got =
+                        std::fread(buffer, 1, sizeof buffer - 1, handle);
+                    std::fclose(handle);
+                    buffer[got] = '\0';
+                    const std::string vendor(buffer);
+                    if (vendor.find("0x10de") != std::string::npos) accelerator = "nvidia";
+                    else if (vendor.find("0x1002") != std::string::npos) accelerator = "amd";
+                    else if (vendor.find("0x8086") != std::string::npos) accelerator = "intel";
+                }
+            }
+        }
+#endif
+        out.symbol_field("accelerator", accelerator);
         return out.build();
     });
 }

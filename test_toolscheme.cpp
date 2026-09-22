@@ -1332,6 +1332,16 @@ static void milestone_1_platform_facts(Interpreter& vm) {
           "m1 platform-facts reports the host word size");
     check(toolscheme::option(facts, "wsl").type() == Value::Type::Boolean,
           "m1 platform-facts answers the WSL question explicitly");
+    // Which local models are even runnable here. The value is one of a closed
+    // set so a caller can branch on it; it says nothing about which model is
+    // better, which is a question for a corpus rather than for the hardware.
+    const Value accelerator = toolscheme::option(facts, "accelerator");
+    check(accelerator.type() == Value::Type::Symbol,
+          "m1 platform-facts names the accelerator");
+    const std::string kind(accelerator.as_symbol());
+    check(kind == "none" || kind == "nvidia" || kind == "amd" || kind == "intel" ||
+              kind == "apple",
+          "m1 accelerator is one of the known kinds");
     check(vm.write(facts) == vm.write(vm.eval("(platform-facts)")),
           "m1 platform facts are stable");
 }
