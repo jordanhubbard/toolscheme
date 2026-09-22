@@ -67,6 +67,58 @@ decisions the chat path is too slow to make at all — the per-tool-call ones th
 project actually cares about. A frontier System One model may also behave
 differently from a days-old 395M one; nothing here measures Jev.
 
+## Laya, measured: faster still, better than Von, still not enough
+
+| arm | p50 | precision | recall | F1 | catches questions |
+|---|---|---|---|---|---|
+| phrase list | — | 0.15 | 0.11 | 0.13 | 1 / 28 |
+| chat backend (Haiku 4.5) | 1700 ms | **0.83** | 0.68 | **0.75** | **24 / 28** |
+| Von 1.0 | 93 ms | 0.24 | 1.00 | 0.39 | 8 / 28 |
+| Laya, `typed-decisions` | 54 ms | 0.23 | 0.97 | 0.37 | 0 / 28 |
+| Laya, english root | **54 ms** | 0.36 | 0.65 | 0.46 | 2 / 28 |
+
+Two of the three claims hold. Laya is the fastest thing measured here — 54 ms
+p50 for four questions, against Von's 93 ms and a claimed 200 ms for Jev — and
+it is better than Von at this task, 0.46 against 0.39, with real dynamic range
+(p10 0.08, p50 0.58, p90 0.90) where Von was saturated. It is still nowhere near
+the chat backend.
+
+Four things were tried before concluding, and none of them closed the gap:
+
+- **Checkpoint.** `typed-decisions` sounds right for this and is much worse
+  (0.37, and it caught none of the 28 questions). The english root checkpoint is
+  the one to use.
+- **Criteria.** Laya documents noul as instructions-only. Supplying the same
+  true/false criteria Von got made it worse: 0.42, zero questions caught.
+- **State length.** Agent messages are long and full of code, markdown and
+  citation XML, so out-of-distribution input was the obvious suspect. Truncating
+  to the last 200 / 400 / 800 characters gave 0.40 / 0.38 / 0.36 — all worse than
+  the full message. The hypothesis is not supported.
+- **Thresholds.** Swept, and there is no operating point that is both safe and
+  useful:
+
+| guard threshold | precision | recall | F1 | fires | catches questions |
+|---|---|---|---|---|---|
+| 0.10 | 0.40 | 0.05 | 0.10 | 5 | 28 / 28 |
+| 0.20 | 0.47 | 0.19 | 0.27 | 15 | 19 / 28 |
+| 0.50 | 0.31 | 0.41 | 0.35 | 48 | 4 / 28 |
+| 0.90 | 0.36 | 0.65 | 0.46 | 67 | 2 / 28 |
+
+Catch the questions and it continues almost nothing; make it useful and it walks
+past 26 of the 28 messages that wanted a person. The chat backend does both at
+once.
+
+**What both small models actually fail at** is the same thing, and it is the
+guard rather than the decision: recognising that a message asks the human
+something. Laya scores "Which OS should I build for first?" at 0.155. That is
+not a calibration problem a threshold can fix.
+
+That leaves a clean split rather than a winner. These models are fast enough for
+the per-tool-call path, where the chat backend is disqualified at 1.7s, and the
+questions there ("will this command emit a large unstructured blob?") are much
+closer to what they do well. The stall decision needs pragmatic reading of a
+long message, and for now that means the slow model.
+
 The phrase list fires on 26 stalls and is wrong on 22 of them, while missing 33
 of the 37 that were genuinely continuable. It is not a weak signal; it is very
 nearly no signal. And the guard I called the one that must never regress --
