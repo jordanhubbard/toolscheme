@@ -363,4 +363,5 @@ continued.
 - The hook never blocks a call, prints nothing unless it has a decision, and exits
   0 whatever happens. A hook that breaks the session it measures is worse than no
   measurement.
-- Nothing is installed into your agent configuration without you pasting it.
+- `make install` adds observation hooks to your agent settings and backs up changed
+  files. Use `CONFIGURE_HOOKS=0` to install files without changing agent settings.

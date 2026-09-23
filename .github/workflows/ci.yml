@@ -20,6 +20,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
       - name: Build and test
         run: make test loop learning-test install-test
       - name: Sanitizers and property fuzzing

@@ -1,9 +1,15 @@
-ToolScheme 0.2.0 ships the CLI, stdio MCP server, observation hooks, and durable learning store as relocatable macOS and Linux installations for ARM64 and x86-64.
+ToolScheme 0.3.0 adds automatic agent hook setup, bounded observation logs, and configurable stall classification.
 
-Learning capture stays local. A separate periodic job commits session summaries and steering revisions to a dedicated Git repository, fetches other hosts' records, and atomically refreshes a bounded startup snapshot. Remote outages retain local commits for retry and never put Git on a tool hook's execution path. Shared notes are advisory data, not executable Scheme; disabling a note propagates through the same Git history.
+Changes since 0.2.0:
 
-The interpreter requires no external library. Git synchronization requires Python 3.9+ and Git 2.28+. Optional DuckDB builds support both macOS and Linux. See `docs/learning.md` for setup, scheduling, conflict handling, and the data contract.
+- `make install` now configures Claude Code and Codex observation hooks automatically. It preserves unrelated settings, backs up changed files, and avoids duplicate hooks on repeated installs. Set `CONFIGURE_HOOKS=0` for a files-only install; `CLAUDE_CONFIG_DIR` and `CODEX_HOME` select alternate settings directories.
+- Observation logs rotate at 64 MB by default, retaining three generations. `TOOLSCHEME_LOG_MAX_BYTES` and `TOOLSCHEME_LOG_KEEP` control retention.
+- Settings live under `$XDG_CONFIG_HOME/toolscheme/config` (normally `~/.config/toolscheme/config`), with the old state-directory configuration retained as a fallback. Credentials can be read from configuration as well as the environment.
+- Optional model-based stall classification supports chat and typed System One backends. Output-aware rewrite decisions use recorded command output sizes. Experiment scripts and results document the measured tradeoffs.
+- Platform facts include accelerator information.
 
-Download the archive for your operating system and architecture, verify its SHA-256 checksum, and extract it to a permanent directory. Add its `bin` directory to PATH. The `bin` and `share` directories must remain together. Agent configuration is explicit; installing the archive does not modify any agent's settings.
+Automatic configuration from source requires Python 3.11+. The interpreter remains free of external library dependencies; durable Git learning requires Python 3.9+ and Git 2.28+. Classification and command rewriting remain opt-in.
 
-Linux release binaries target Ubuntu 22.04 or compatible systems with glibc 2.35+; macOS release binaries target macOS 15+. Windows native support is not included. This release does not automatically execute synthesized shared tools or turn on transparent command rewriting.
+Download the archive for your operating system and architecture, verify its SHA-256 checksum, and extract it to a permanent directory. Add its `bin` directory to PATH and keep `bin` and `share` together. Extracting a release archive does not modify agent settings; automatic hook setup runs through `make install` in a source checkout.
+
+Release archives support macOS and Linux on ARM64 and x86-64. Linux binaries target Ubuntu 22.04 or compatible systems with glibc 2.35+; macOS binaries target macOS 15+. Native Windows support is not included.
