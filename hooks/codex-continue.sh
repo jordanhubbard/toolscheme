@@ -28,6 +28,20 @@ SESSIONS="${CODEX_HOME:-$HOME/.codex}/sessions"
 [ -d "$SESSIONS" ] || exit 0
 
 STATE="${TOOLSCHEME_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/toolscheme}"
+
+# Same split as observe.sh: settings under XDG_CONFIG_HOME, state where it is.
+CONFIG="${TOOLSCHEME_CONFIG:-}"
+if [ -z "$CONFIG" ]; then
+  for candidate in "${XDG_CONFIG_HOME:-$HOME/.config}/toolscheme/config" "$STATE/config"; do
+    [ -r "$candidate" ] && { CONFIG="$candidate"; break; }
+  done
+fi
+if [ -n "$CONFIG" ] && [ -r "$CONFIG" ]; then
+  set -a
+  . "$CONFIG"
+  set +a
+fi
+
 TOOLSCHEME_CODEX_SOCKET="${TOOLSCHEME_CODEX_SOCKET:-$STATE/codex.sock}"
 export TOOLSCHEME_CODEX_SOCKET
 

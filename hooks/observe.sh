@@ -33,15 +33,36 @@ fi
 STATE="${TOOLSCHEME_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/toolscheme}"
 mkdir -p "$STATE" 2>/dev/null || exit 0
 
+# Settings are configuration and belong under XDG_CONFIG_HOME; the observation
+# log is state and belongs where it already is. They were both in the state
+# directory, which was wrong about the first and right about the second.
+#
+# The old location is still read, so an existing installation keeps working, and
+# a hook is the worst possible place to learn that a file moved. Explicit
+# TOOLSCHEME_CONFIG wins over both.
+CONFIG="${TOOLSCHEME_CONFIG:-}"
+if [ -z "$CONFIG" ]; then
+  for candidate in "${XDG_CONFIG_HOME:-$HOME/.config}/toolscheme/config" "$STATE/config"; do
+    [ -r "$candidate" ] && { CONFIG="$candidate"; break; }
+  done
+fi
+
+# `set -a` exports everything the file defines, which is what lets a credential
+# reach a hook that inherits no login shell.
+if [ -n "$CONFIG" ] && [ -r "$CONFIG" ]; then
+  set -a
+  . "$CONFIG"
+  set +a
+fi
+
 # Classifying a stall needs an HTTPS call, which here means curl, which means the
 # process capability. It is granted only when classification is switched on, so
 # the ordinary observing hook keeps no ability to run anything at all. The URL
 # comes from the environment and never from the transcript being judged.
 NET=""
-case "$(. "$STATE/config" 2>/dev/null; echo "${TOOLSCHEME_CLASSIFY:-0}")" in
+case "${TOOLSCHEME_CLASSIFY:-0}" in
   1|true|yes|on) NET="--allow-process --allow-program curl" ;;
 esac
-[ "${TOOLSCHEME_CLASSIFY:-}" = "1" ] && NET="--allow-process --allow-program curl"
 
 TOOLSCHEME_BINARY="$BIN" \
 TOOLSCHEME_HOOKS="$HOME_DIR/hooks" \

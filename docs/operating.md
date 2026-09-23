@@ -174,7 +174,7 @@ reading, and that stays in Scheme either way.
 
 ## Steering
 
-Off unless asked for, in `~/.local/state/toolscheme/config`:
+Off unless asked for, in `~/.config/toolscheme/config` (see `docs/config.example`):
 
 ```
 TOOLSCHEME_STEER=1      # advise, per call

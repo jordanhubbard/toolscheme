@@ -1,0 +1,75 @@
+# toolscheme settings.
+#
+# Copy this to $XDG_CONFIG_HOME/toolscheme/config, which on a default setup is
+# ~/.config/toolscheme/config:
+#
+#     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/toolscheme"
+#     install -m 600 docs/config.example \
+#       "${XDG_CONFIG_HOME:-$HOME/.config}/toolscheme/config"
+#
+# Mode 600 matters once a key is in it. The hooks read this file and export what
+# it defines, so a credential reaches a hook that inherits no login shell.
+#
+# Everything here is off unless set. Delete a line, or set it to 0, to turn that
+# off again. The environment wins over this file, and TOOLSCHEME_CONFIG wins over
+# both if you keep it somewhere else.
+#
+# Where things live:
+#   configuration   $XDG_CONFIG_HOME/toolscheme/    (~/.config/toolscheme)
+#   observations    $XDG_STATE_HOME/toolscheme/     (~/.local/state/toolscheme)
+#   binary, library $HOME/.local/bin, $HOME/.local/share/toolscheme
+#
+# The observation log is genuinely state -- it is a log, it grows, and losing it
+# costs history rather than configuration -- so it stays under XDG_STATE_HOME.
+# An older installation kept this file there too; that location is still read, so
+# nothing breaks, but this is where it belongs.
+
+
+# --- Advice -----------------------------------------------------------------
+# Adds a note to the model's context. Never changes what a call returns.
+TOOLSCHEME_STEER=1
+
+# Replaces a call with a published tool. Allowed only for a command shape that a
+# tool has been proven to reproduce byte for byte, exit status included, and only
+# when the command was going to print enough to be worth the substitution.
+# Nothing currently claims such a shape, so nothing is rewritten.
+# TOOLSCHEME_REDIRECT=1
+# TOOLSCHEME_REDIRECT_MIN_BYTES=2000
+
+
+# --- Deciding whether a stopped session should carry on ----------------------
+# Off unless set. Never answers a question on your behalf: a question, or any
+# sign of waiting on a person, stops it. MAX bounds it per session.
+# TOOLSCHEME_CONTINUE=1
+# TOOLSCHEME_CONTINUE_MAX=2
+
+# Ask a model rather than matching strings. Measured over 162 labelled stalls:
+# precision 0.83 and 24 of 28 questions caught, against 0.15 and 1 of 28 for the
+# phrase lists. Costs one HTTPS round trip per turn end, about 1.7s. If the call
+# fails, nothing continues -- it does not fall back to the lists.
+# TOOLSCHEME_CLASSIFY=1
+# TOOLSCHEME_CLASSIFY_TIMEOUT_MS=3000
+
+# A local typed-decision model instead, same wire API as TypeSafe Jev. Measured
+# at 0.46 F1 against the chat backend's 0.75 on the stall corpus, so this is not
+# currently the better choice for this decision -- see experiments/.
+# TOOLSCHEME_CLASSIFY_BACKEND=systemone
+# TOOLSCHEME_CLASSIFY_ENDPOINT=http://127.0.0.1:8000/v1/systemone
+# TOOLSCHEME_CLASSIFY_MODEL=von-1.0.0
+
+
+# --- Codex --------------------------------------------------------------------
+# Codex has no turn-end hook, so continuation there is a poll plus an injection
+# through its app server, and reaches only sessions started via
+# hooks/codex-session.sh. See docs/operating.md.
+# TOOLSCHEME_CODEX_CONTINUE=1
+# TOOLSCHEME_CODEX_IDLE=90
+# TOOLSCHEME_CODEX_STALE=21600
+
+
+# --- Credentials --------------------------------------------------------------
+# Needed only when classification or synthesis is on. The credential decides the
+# host and the model name as well as the auth header, so set one and not both
+# unless you mean to prefer the gateway.
+# ANTHROPIC_API_KEY=sk-...
+# NVIDIA_INFERENCE_API_KEY=sk-...
