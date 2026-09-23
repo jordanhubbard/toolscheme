@@ -135,7 +135,7 @@ none of them.
 |---|---|
 | `observations.jsonl` | one record per hook invocation, append-only |
 | `sessions/<id>.keys` | per-session invocation keys, for repeat detection |
-| `config` | settings, read when the environment does not answer |
+| `config` | older installations only; settings now live in `~/.config/toolscheme/config` |
 
 A record holds the tool, the command, the working directory, the session and call
 ids, a timestamp, and the result size. Commands are clipped, and the clip respects

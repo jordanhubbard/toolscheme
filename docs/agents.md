@@ -242,10 +242,10 @@ the hook never meant to make.
 An environment variable only reaches a hook if the agent inherited it, and whether
 it did depends on whether the session began from a shell, a desktop launcher, or
 another agent. So a setting is read from the environment when it is there and from
-a file beside the observations when it is not:
+a configuration file when it is not:
 
 ```
-# ~/.local/state/toolscheme/config
+# ~/.config/toolscheme/config   (the state directory is still read, for older installs)
 TOOLSCHEME_STEER=1
 ```
 
