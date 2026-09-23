@@ -108,7 +108,8 @@ endef
 
 loop: toolscheme
 	@$(call check-scheme,tests/intake-check.scm --lib lib,(checks-hold #t))
-	@$(call check-scheme,tests/hook-check.scm --lib lib,(checks-hold #t))
+	@rm -rf .check-root && mkdir -p .check-root
+	@$(call check-scheme,tests/hook-check.scm --lib lib --root .check-root,(checks-hold #t))
 	@$(call check-scheme,tests/tools-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
 	@rm -rf .check-root && mkdir -p .check-root

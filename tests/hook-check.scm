@@ -74,6 +74,49 @@
 ;; Nothing an agent can send may make the hook raise.
 (define malformed (catch-errors (lambda () (events-of-record '()))))
 
+;;; Rotation. The log grows by roughly 20MB a day and nothing bounded it: the
+;;; copy on the machine this was written on reached 156MB before anyone looked.
+;;; Exercised with a tiny limit, since the property is the bound and not the size.
+
+(define rotation-log "rotation-test.jsonl")
+
+(define (write-padding n)
+  (let loop ((i 0))
+    (if (< i n)
+        (begin (write-file rotation-log
+                           "0123456789012345678901234567890123456789012345678901234567890123\n"
+                           '((append #t)))
+               (hook-rotate-if-needed rotation-log)
+               (loop (+ i 1)))
+        #t)))
+
+(define (generation-size n)
+  (let ((info (catch-errors
+                (lambda () (stat (hook-generation-path rotation-log n)
+                                 '((volatile #t)))))))
+    (if (error? info) #f (field-ref info 'size 0))))
+
+;; 20 lines of 65 bytes against a 200-byte limit and two generations kept.
+;; The limit is written into the root the checks run under, so this exercises
+;; rotation on its own terms rather than depending on what the environment
+;; happens to hold -- which passed when run by hand and failed under `make`.
+(define rotated
+  (begin (catch-errors
+           (lambda () (write-file "config"
+                                  "TOOLSCHEME_LOG_MAX_BYTES=200\nTOOLSCHEME_LOG_KEEP=2\n")))
+         (catch-errors (lambda () (rm (list rotation-log))))
+         (catch-errors (lambda () (rm (list (hook-generation-path rotation-log 1)))))
+         (catch-errors (lambda () (rm (list (hook-generation-path rotation-log 2)))))
+         (catch-errors (lambda () (rm (list (hook-generation-path rotation-log 3)))))
+         (write-padding 20)
+         #t))
+
+(define kept-1 (generation-size 1))
+(define kept-2 (generation-size 2))
+;; The bound comes from this one being absent: a third generation would mean the
+;; log grows without limit, just more slowly.
+(define beyond-keep (generation-size 3))
+
 (define checks
   (list (list 'pre-is-call (eq? (field-ref first-event 'kind) 'tool-call))
         (list 'directory-kept (field-ref first-event 'directory))
@@ -88,7 +131,12 @@
         (list 'rewrite-marked (field-ref rewritten "rewritten" #f))
         (list 'rewrite-not-counted-as-demand
               (null? (field-ref (car rewritten-events) 'input '())))
-        (list 'malformed-survived (not (error? malformed)))))
+        (list 'malformed-survived (not (error? malformed)))
+        (list 'rotation-keeps-a-generation (if (number? kept-1) #t #f))
+        (list 'rotation-keeps-the-second (if (number? kept-2) #t #f))
+        (list 'rotation-drops-the-oldest (if beyond-keep 'LEAKED 'bounded))
+        (list 'generation-naming (hook-generation-path "a.jsonl" 2))
+        (list 'default-limit-is-bounded (> (hook-log-bytes) 0))))
 
 (list (list 'checks checks)
       (list 'checks-hold
@@ -105,4 +153,10 @@
                  (eq? (field-ref failure "ok" #t) #f)
                  (eq? (field-ref rewritten "rewritten" #f) #t)
                  (null? (field-ref (car rewritten-events) 'input '()))
-                 (not (error? malformed)))))
+                 (not (error? malformed))
+                 (number? kept-1)
+                 (number? kept-2)
+                 ;; The property that makes it a bound rather than a delay.
+                 (not beyond-keep)
+                 (equal? (hook-generation-path "a.jsonl" 2) "a.jsonl.2")
+                 (> (hook-log-bytes) 0))))

@@ -109,6 +109,67 @@
           (list "at" (field-ref (time) 'epoch-milliseconds))
           (list "bytes" (if (absent? response) 0 (string-length (write-to-string response)))))))
 
+;;; ---------------------------------------------------------------------------
+;;; Rotation.
+;;;
+;;; The log grows by roughly 20MB a day under steady use and nothing was
+;;; rotating it: the copy on this machine reached 156MB and 164,000 records
+;;; before anyone looked. A hook that runs on every tool call cannot be allowed
+;;; to fill a disk, and "the operator will notice" is not a bound.
+;;;
+;;; Generations rather than truncation, because the analysis wants history and
+;;; discarding the oldest is the only part that loses anything. The size is
+;;; checked after the append, so the cost is one stat per call and never a read
+;;; of the log itself.
+
+(define hook-default-log-bytes 67108864)
+(define hook-default-generations 3)
+
+(define (hook-setting-number name fallback)
+  (let ((configured (setting name)))
+    (if (string? configured)
+        (let ((n (string->number configured)))
+          (if (number? n) n fallback))
+        fallback)))
+
+(define (hook-log-bytes)
+  (hook-setting-number "TOOLSCHEME_LOG_MAX_BYTES" hook-default-log-bytes))
+
+(define (hook-generations)
+  (hook-setting-number "TOOLSCHEME_LOG_KEEP" hook-default-generations))
+
+(define (hook-generation-path path n)
+  (string-append path "." (number->string n)))
+
+;; Oldest first, so nothing is overwritten on the way down. The last generation
+;; is removed rather than shifted, which is where the bound actually comes from.
+(define (hook-rotate path keep)
+  (let ((oldest (hook-generation-path path keep)))
+    (catch-errors (lambda () (rm (list oldest))))
+    (let loop ((n (- keep 1)))
+      (if (< n 1)
+          (catch-errors (lambda () (mv path (hook-generation-path path 1))))
+          (begin
+            (catch-errors (lambda () (mv (hook-generation-path path n)
+                                         (hook-generation-path path (+ n 1)))))
+            (loop (- n 1)))))))
+
+;; Rotation is best-effort and deliberately silent. Two hooks finishing together
+;; can race here, and the worst outcome is a generation that holds slightly more
+;; or less than its share -- which costs nothing, where raising would cost the
+;; session the hook is supposed to be measuring.
+(define (hook-rotate-if-needed path)
+  (let ((keep (hook-generations))
+        (limit (hook-log-bytes)))
+    (if (< keep 1)
+        #f
+        (let ((info (catch-errors (lambda () (stat path '((volatile #t)))))))
+          (if (error? info)
+              #f
+              (if (>= (field-ref info 'size 0) limit)
+                  (hook-rotate path keep)
+                  #f))))))
+
 (define (hook-append record)
   (let* ((path (hook-log-path))
          (line (clip (field-ref (json-write record) 'text) hook-record-limit))
@@ -121,7 +182,8 @@
               written
               (begin (mkdir parent '((parents #t)))
                      (write-file path (string-append line "\n") '((append #t))))))
-        written)))
+        (begin (catch-errors (lambda () (hook-rotate-if-needed path)))
+               written))))
 
 (define (hook-observe)
   (catch-errors

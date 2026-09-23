@@ -143,7 +143,10 @@ UTF-8 character boundaries.
 
 Two things to know before turning it on for every project:
 
-- The log grows about 22 MB a day under steady use, and **nothing rotates it**.
+- The log grows about 22 MB a day under steady use and rotates at 64 MB, keeping
+  three generations — so it is bounded at roughly 256 MB, not unbounded. Tune
+  with `TOOLSCHEME_LOG_MAX_BYTES` and `TOOLSCHEME_LOG_KEEP`; setting `KEEP` to 0
+  turns rotation off and restores the old behaviour.
 - It will contain commands and working directories from **every project** either
   agent touches, in one file outside all of them.
 

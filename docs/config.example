@@ -37,6 +37,13 @@ TOOLSCHEME_STEER=1
 # TOOLSCHEME_REDIRECT_MIN_BYTES=2000
 
 
+# --- The observation log ------------------------------------------------------
+# Rotates at this size, keeping this many generations, so the log is bounded at
+# roughly MAX x (KEEP + 1). KEEP=0 turns rotation off. Defaults shown.
+# TOOLSCHEME_LOG_MAX_BYTES=67108864
+# TOOLSCHEME_LOG_KEEP=3
+
+
 # --- Deciding whether a stopped session should carry on ----------------------
 # Off unless set. Never answers a question on your behalf: a question, or any
 # sign of waiting on a person, stops it. MAX bounds it per session.
