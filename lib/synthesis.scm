@@ -16,12 +16,13 @@
 ;; all -- which is the shape this file already builds and parses. So only the host,
 ;; the auth header and the model name differ from talking to Anthropic directly,
 ;; and both are supported rather than one replacing the other.
-;; The credential decides the host and the model name as well as the header. All
-;; three have to agree: an Anthropic key sent to the gateway, under a model name
-;; only the gateway understands, fails as a 401 that reads like a bad key. Before
-;; this, setting only ANTHROPIC_API_KEY produced exactly that -- the header
-;; followed the credential and the other two did not.
-(define (llm-via-gateway?) (if (env-value "NVIDIA_INFERENCE_API_KEY") #t #f))
+;;
+;; Which one is in use follows the credential, and all three have to move with it.
+;; An Anthropic key sent to the gateway, under a model name only the gateway
+;; understands, fails as a 401 that reads like a bad key. Before this, setting
+;; only ANTHROPIC_API_KEY produced exactly that: the header followed the
+;; credential and the other two did not, so the fallback path had never worked.
+(define (llm-via-gateway?) (if (setting "NVIDIA_INFERENCE_API_KEY") #t #f))
 
 (define synthesis-endpoint
   (or (env-value "TOOLSCHEME_SYNTHESIS_ENDPOINT")
@@ -38,9 +39,14 @@
 ;; supplies the key also decides how it is presented: the gateway takes a bearer
 ;; token, Anthropic directly takes x-api-key, and sending the wrong one is a 401
 ;; that looks like a bad key rather than a bad header.
+;; `setting` rather than `env-value`, so a key can live in the config file beside
+;; every other toolscheme setting. A hook is not started from a login shell and
+;; inherits whatever the agent happened to be launched with, so requiring the
+;; environment would mean the credential is present when a human runs the tool
+;; and absent when the hook does -- working in every test and never in practice.
 (define (synthesis-credential)
-  (let ((gateway (env-value "NVIDIA_INFERENCE_API_KEY"))
-        (anthropic (env-value "ANTHROPIC_API_KEY")))
+  (let ((gateway (setting "NVIDIA_INFERENCE_API_KEY"))
+        (anthropic (setting "ANTHROPIC_API_KEY")))
     (cond (gateway (list (list 'key gateway) (list 'header "authorization")
                          (list 'value (string-append "Bearer " gateway))))
           (anthropic (list (list 'key anthropic) (list 'header "x-api-key")
