@@ -46,8 +46,12 @@ make install PREFIX=/usr/local  # or system-wide
 ```
 
 A hook that lives in a repository can only watch that repository, so observing
-every session means installing outside any checkout. `make install` prints the
-agent configuration to add; it writes none of it for you.
+every session means installing outside any checkout. `make install` automatically
+adds observation hooks to `~/.claude/settings.json` and `~/.codex/config.toml`,
+preserving unrelated settings and backing up changed files beside the originals.
+Repeated installs do not add duplicate hooks. This configuration step requires
+Python 3.11+. Use `CONFIGURE_HOOKS=0` to install files only, or set
+`CLAUDE_CONFIG_DIR` / `CODEX_HOME` to configure alternate agent directories.
 
 ## Durable learning across machines
 
@@ -79,7 +83,7 @@ command, the directory it ran in, and -- joining the two events by call id -- ho
 long it took and how many bytes came back. Claude Code and Codex send the same
 fields and accept the same decisions, so one script serves both. See
 `docs/agents.md` for setup; `.claude/settings.json` installs it for this project,
-and nothing is installed globally.
+and `make install` configures observation globally for the current user.
 
 ```sh
 toolscheme analyze ~/.claude/projects     # Claude Code, nested schema

@@ -134,6 +134,7 @@ learning-test: toolscheme
 	python3 tests/learning_test.py
 
 install-test: toolscheme
+	python3 tests/configure_hooks_test.py
 	python3 tests/install_test.py
 
 package: toolscheme
@@ -183,6 +184,11 @@ BINDIR = $(PREFIX)/bin
 SHAREDIR = $(PREFIX)/share/toolscheme
 STATEDIR = $${XDG_STATE_HOME:-$(HOME)/.local/state}/toolscheme
 
+# Set CONFIGURE_HOOKS=0 for staging/package installs. Configuration requires Python 3.11+.
+CONFIGURE_HOOKS ?= 1
+CLAUDE_CONFIG_DIR ?= $(HOME)/.claude
+CODEX_HOME ?= $(HOME)/.codex
+
 install: toolscheme
 	install -d "$(BINDIR)" "$(SHAREDIR)/lib/tools" "$(SHAREDIR)/hooks"
 	install -m 755 toolscheme "$(BINDIR)/toolscheme"
@@ -204,22 +210,9 @@ install: toolscheme
 	@echo "installed: $(BINDIR)/toolscheme and $(SHAREDIR)"
 	@echo "observations will go to $(STATEDIR)"
 	@echo
-	@echo "To observe every session, add the handler to your agent configuration."
-	@echo "Neither file is written for you; both are yours to review."
-	@echo
-	@echo "  ~/.claude/settings.json"
-	@echo '    {"hooks": {"PreToolUse": [{"matcher": "*", "hooks":'
-	@echo '      [{"type": "command", "command": "$(SHAREDIR)/hooks/observe.sh", "timeout": 5}]}],'
-	@echo '               "PostToolUse": [{"matcher": "*", "hooks":'
-	@echo '      [{"type": "command", "command": "$(SHAREDIR)/hooks/observe.sh", "timeout": 5}]}]}}'
-	@echo
-	@echo "  ~/.codex/config.toml"
-	@echo '    [[hooks.PreToolUse]]'
-	@echo '    matcher = "*"'
-	@echo '    [[hooks.PreToolUse.hooks]]'
-	@echo '    type = "command"'
-	@echo '    command = "$(SHAREDIR)/hooks/observe.sh"'
-	@echo
+	@if [ "$(CONFIGURE_HOOKS)" != "0" ]; then \
+	   python3 scripts/configure-hooks.py --hook "$(SHAREDIR)/hooks/observe.sh" \
+	     --claude-dir "$(CLAUDE_CONFIG_DIR)" --codex-dir "$(CODEX_HOME)"; fi
 	@echo "Then: toolscheme analyze $(STATEDIR)"
 
 uninstall:

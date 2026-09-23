@@ -12,7 +12,8 @@ make install PREFIX=/usr/local  # or system-wide
 ```
 
 That puts `toolscheme` in `$PREFIX/bin` and the rest in
-`$PREFIX/share/toolscheme`, and prints the configuration to add. Observations go to
+`$PREFIX/share/toolscheme`, and configures observation hooks in your Claude and
+Codex user settings. Observations go to
 `$XDG_STATE_HOME/toolscheme` (`~/.local/state/toolscheme`), which is also the
 sandbox root the hook runs under -- so it watches every project and can write to
 none of them.
@@ -98,9 +99,11 @@ so every session that runs it appends to the same `observations.jsonl` in the st
 directory no matter which project the agent is working in. Centralization is a
 property of where the hook lives, not of any coordination between sessions.
 
-To collect from everything rather than from this project only, `make install` and
-put the printed handler path in `~/.claude/settings.json` and `~/.codex/config.toml`.
-Neither is installed globally by default.
+To collect from every project, run `make install`. It updates
+`~/.claude/settings.json` and `~/.codex/config.toml` automatically, preserving
+unrelated settings and backing up changed files. Repeated installs do not duplicate
+the hooks. Configuration requires Python 3.11+; use `CONFIGURE_HOOKS=0` to skip it.
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` override the agent configuration directories.
 
 Three things are worth knowing before doing that:
 

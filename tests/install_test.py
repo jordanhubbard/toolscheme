@@ -6,12 +6,24 @@ from pathlib import Path
 import subprocess
 import tempfile
 import contextlib
+import shlex
+import tomllib
 
 root = Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix="toolscheme install ") as tmp:
     base = Path(tmp)
     prefix = base / "original"
-    subprocess.run(["make", "install", "PREFIX=" + str(prefix)], cwd=root, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["make", "install", "PREFIX=" + str(prefix),
+                    "CLAUDE_CONFIG_DIR=" + str(base / "claude"),
+                    "CODEX_HOME=" + str(base / "codex")],
+                   cwd=root, check=True, stdout=subprocess.DEVNULL)
+    command = shlex.quote(str((prefix / "share/toolscheme/hooks/observe.sh").resolve()))
+    claude = json.loads((base / "claude/settings.json").read_text())
+    codex = tomllib.loads((base / "codex/config.toml").read_text())
+    for config, events in ((claude, ("PreToolUse", "PostToolUse")),
+                           (codex, ("PreToolUse",))):
+        for event in events:
+            assert config["hooks"][event][0]["hooks"][0]["command"] == command
     relocated = base / "relocated"
     prefix.rename(relocated)
     env = dict(os.environ, TOOLSCHEME_STATE=str(base / "state"))

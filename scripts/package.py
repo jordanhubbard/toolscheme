@@ -17,7 +17,7 @@ out = root / "dist"
 out.mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory() as directory:
     stage = Path(directory) / name
-    subprocess.run(["make", "install", "PREFIX=" + str(stage)], cwd=root, check=True)
+    subprocess.run(["make", "install", "CONFIGURE_HOOKS=0", "PREFIX=" + str(stage)], cwd=root, check=True)
     shutil.copy2(root / "README.md", stage)
     shutil.copytree(root / "docs", stage / "docs")
     archive = out / (name + ".tar.gz")

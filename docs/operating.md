@@ -21,7 +21,9 @@ make install                 # to ~/.local by default
 make install PREFIX=/usr/local
 ```
 
-`make install` prints the agent configuration to add. It writes none of it for you.
+`make install` merges the observation hooks into your Claude and Codex settings,
+backing up changed files and preserving unrelated settings. Python 3.11+ is
+required for configuration; use `CONFIGURE_HOOKS=0` for a files-only install.
 
 Optionally, for fast ad-hoc queries over the collected log:
 
