@@ -40,15 +40,19 @@
 
 (define (classify-endpoint)
   (or (env-value "TOOLSCHEME_CLASSIFY_ENDPOINT")
-      (if (classify-systemone?)
-          "https://api.typesafe.ai/v1/systemone"
-          "https://inference-api.nvidia.com/v1/messages")))
+      (cond ((classify-systemone?) "https://api.typesafe.ai/v1/systemone")
+            ;; Follows the credential, for the reason given in [[synthesis]]:
+            ;; host, header and model name all have to agree.
+            ((llm-via-gateway?) "https://inference-api.nvidia.com/v1/messages")
+            (else "https://api.anthropic.com/v1/messages"))))
 
 ;; Cheap on purpose. This runs on a hook path, and the measurement that
 ;; justified it was taken with exactly this model.
 (define (classify-model)
   (or (env-value "TOOLSCHEME_CLASSIFY_MODEL")
-      (if (classify-systemone?) "jev-latest" "azure/anthropic/claude-haiku-4-5")))
+      (cond ((classify-systemone?) "jev-latest")
+            ((llm-via-gateway?) "azure/anthropic/claude-haiku-4-5")
+            (else "claude-haiku-4-5"))))
 
 ;; A locally served model needs no credential at all, which is the point of
 ;; running one: nothing about this decision then leaves the machine.

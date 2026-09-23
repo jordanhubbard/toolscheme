@@ -16,12 +16,23 @@
 ;; all -- which is the shape this file already builds and parses. So only the host,
 ;; the auth header and the model name differ from talking to Anthropic directly,
 ;; and both are supported rather than one replacing the other.
+;; The credential decides the host and the model name as well as the header. All
+;; three have to agree: an Anthropic key sent to the gateway, under a model name
+;; only the gateway understands, fails as a 401 that reads like a bad key. Before
+;; this, setting only ANTHROPIC_API_KEY produced exactly that -- the header
+;; followed the credential and the other two did not.
+(define (llm-via-gateway?) (if (env-value "NVIDIA_INFERENCE_API_KEY") #t #f))
+
 (define synthesis-endpoint
   (or (env-value "TOOLSCHEME_SYNTHESIS_ENDPOINT")
-      "https://inference-api.nvidia.com/v1/messages"))
+      (if (llm-via-gateway?)
+          "https://inference-api.nvidia.com/v1/messages"
+          "https://api.anthropic.com/v1/messages")))
 
+;; Same model either way; the gateway prefixes its routes.
 (define synthesis-model
-  (or (env-value "TOOLSCHEME_SYNTHESIS_MODEL") "azure/anthropic/claude-opus-5"))
+  (or (env-value "TOOLSCHEME_SYNTHESIS_MODEL")
+      (if (llm-via-gateway?) "azure/anthropic/claude-opus-5" "claude-opus-5")))
 
 ;; Credentials live in the environment, never in the repository. Which variable
 ;; supplies the key also decides how it is presented: the gateway takes a bearer

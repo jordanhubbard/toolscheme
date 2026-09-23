@@ -61,6 +61,13 @@
     (list 'classification-off-by-default (not (classify-enabled?)))
     ;; The chat backend stays the default; the typed one is asked for.
     (list 'chat-backend-by-default (not (classify-systemone?)))
+    ;; Host, header and model name follow the credential together. Letting the
+    ;; header follow it alone sent an Anthropic key to the gateway under a model
+    ;; name only the gateway knows, which fails as a 401 that reads like a bad
+    ;; key. The checks run with no gateway key, so this is the direct host.
+    (list 'host-follows-the-credential
+          (string-contains? (classify-endpoint) "api.anthropic.com"))
+    (list 'model-name-follows-it-too (classify-model))
     (list 'confident-answer-continues (says confident "names_next_step"))
     (list 'confident-answer-is-unblocked (not (classify-blocked? (answered confident))))
     (list 'faint-suspicion-still-blocks (classify-blocked? (answered faint-suspicion)))
@@ -79,6 +86,8 @@
                  (= (last-brace chatty) 43)
                  (not (last-brace "no object here"))
                  (not (classify-systemone?))
+                 (string-contains? (classify-endpoint) "api.anthropic.com")
+                 (equal? (classify-model) "claude-haiku-4-5")
                  (says confident "names_next_step")
                  (not (classify-blocked? (answered confident)))
                  ;; The two that encode the asymmetry.
