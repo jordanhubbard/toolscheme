@@ -49,6 +49,49 @@ anti-correlated:
 `find /` scores lowest and `wc -l` highest. Both the noul and the ordinal score
 primitive were asked, in one forward pass, and both behaved this way.
 
+## Is there anything beyond the program name?
+
+The memo keys on the program alone and its precision is 0.45, so it cannot tell
+`grep -rn x /` from `grep -n x small.c`. If a capable model reading the whole
+command cannot beat it, the table is at the ceiling for this task and no faster
+or larger local model is worth chasing. 400 commands sampled from the corpus,
+judged by Haiku 4.5 with the arguments in front of it:
+
+| predictor | precision | recall | F1 | accuracy |
+|---|---|---|---|---|
+| memo (program name only) | 0.42 | 0.77 | **0.55** | 0.76 |
+| Haiku reading the arguments | 0.24 | 0.29 | 0.26 | 0.69 |
+| memo OR model | 0.32 | 0.81 | 0.46 | 0.63 |
+| memo AND model | 0.51 | 0.25 | 0.33 | 0.81 |
+
+**Headroom: −0.29 F1.** Reading the arguments makes it worse, not better. Where
+the two disagree, on 157 of 400, the memo is right 92 times and the model 65.
+
+The one thing the model adds is precision when it agrees: "memo AND model"
+reaches 0.51, the best of any row, at a quarter of the recall. If a future
+rewrite needs to be very sure before substituting, that intersection is the
+shape to reach for — but not at 1.7s a call, and not for F1 0.33.
+
+So the answer is that output size is mostly unpredictable from the command text
+beyond which program runs. That is a fact about the task, not about any model,
+and it closes the question: there is nothing here for a better local model to
+recover.
+
+## Two harness bugs worth naming
+
+Both produced results that looked like findings.
+
+The first run reported the model at 0.00 precision and 0.00 recall. Every batch
+was failing on an exhausted budget and the harness padded the missing answers
+with False, which is indistinguishable from a model that thinks nothing is ever
+large. Failures are now retried and then fatal.
+
+The second assigned the batch result before checking its length, so when a batch
+came back with 19 answers for 20 commands and every retry failed the same way,
+the short batch stayed — shifting every later prediction onto the wrong command.
+Answers are now keyed by an index the model echoes back, so a dropped or
+duplicated entry is caught instead of silently misaligning the labels.
+
 ## What this means for the per-call path
 
 No classifier goes on it. The question was whether 21 ms could buy a decision
