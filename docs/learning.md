@@ -33,7 +33,28 @@ toolscheme learn sync
 toolscheme learn record bounded-reads --disable
 ```
 
-A record is durable in the local outbox immediately. The next sync puts it in a local Git commit before trying the network. Shared notes are plain advisory text; they cannot install capabilities, execute Scheme, or automatically publish generated tools. Do not put credentials into manually written notes. Existing replay/publication gates still govern executable tools.
+A record is durable in the local outbox immediately. The next sync puts it in a local Git commit before trying the network. Shared notes are plain advisory text; they cannot install capabilities or execute Scheme. Do not put credentials into manually written notes.
+
+## Evolved Scheme code
+
+Tools travel through the same repository, and this is what makes it a shared store of knowledge rather than a per-machine journal: a tool the replay gate proved on one host is available to every other one. Three directories, and the distinction between them is the safety property.
+
+| directory | what | loaded? |
+|---|---|---|
+| `$STATE/tools/` | this host's active tools | **yes** |
+| `<repo>/tools/<host>/` | the distributed graph, what a pull brings | no |
+| `$STATE/learning-tools/<host>/` | other hosts' tools, materialised locally | no |
+
+```sh
+toolscheme learn tools                      # what is active here, what is on offer
+toolscheme learn adopt HOST/NAME.scm        # copy one into the load path
+```
+
+**Arriving is not the same as running.** A tool another host published is committed, fetched and materialised without ever being loaded by this machine; `adopt` is what puts it in the load path, one tool at a time, after someone has read it. Git is the transport precisely so that no server has to be reachable from a hook — and the same reasoning says an incoming file must not become executable here without a person choosing it. Pulling changes what you can see, never what you run.
+
+The replay gate still governs publication. A tool reaches `$STATE/tools/` either because replay proved it here — equivalent on every recorded case *and* winning on bytes, time or stability — or because you adopted it. What you adopt, you then offer onward as your own on the next sync, so a proven tool propagates by consent rather than by broadcast.
+
+Records are immutable and collide loudly; tools are revised, because a gate that improves one should be able to publish the better version. The provenance header written at publication travels with the source: the pattern that motivated it, what replay measured, and the cases it agreed on.
 
 ## Storage and convergence
 

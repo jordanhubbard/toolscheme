@@ -144,14 +144,31 @@ bool load_library(Interpreter& vm, const std::string& directory, std::string& er
     const std::string tools = directory + "/tools";
     vm.define("tool-directory", Value::string(tools));
     std::vector<std::string> published;
-    if (DIR* handle = ::opendir(tools.c_str())) {
-        while (struct dirent* entry = ::readdir(handle)) {
-            const std::string name = entry->d_name;
-            if (name.size() > 4 && name.compare(name.size() - 4, 4, ".scm") == 0)
-                published.push_back(tools + "/" + name);
+    const auto collect = [&published](const std::string& from) {
+        if (DIR* handle = ::opendir(from.c_str())) {
+            while (struct dirent* entry = ::readdir(handle)) {
+                const std::string name = entry->d_name;
+                if (name.size() > 4 && name.compare(name.size() - 4, 4, ".scm") == 0)
+                    published.push_back(from + "/" + name);
+            }
+            ::closedir(handle);
         }
-        ::closedir(handle);
-    }
+    };
+    collect(tools);
+    // Tools this host has evolved or adopted. They arrive by Git rather than by
+    // install, which is what makes the repository a shared store rather than a
+    // per-machine one -- but only after `learn adopt` puts them here. A tool
+    // another host published sits in the shared area and is not loaded, so
+    // pulling never changes what this machine runs.
+    std::string state;
+    if (const char* p = std::getenv("TOOLSCHEME_STATE")) state = p;
+    else if (const char* p = std::getenv("XDG_STATE_HOME")) state = std::string(p) + "/toolscheme";
+    else if (const char* p = std::getenv("HOME")) state = std::string(p) + "/.local/state/toolscheme";
+    // Defined even when there is no state directory, so Scheme can test it
+    // rather than test for its existence.
+    const std::string adopted = state.empty() ? std::string() : state + "/tools";
+    vm.define("adopted-tool-directory", Value::string(adopted));
+    if (!adopted.empty()) collect(adopted);
     std::sort(published.begin(), published.end());
     for (const std::string& path : published) {
         std::ifstream input(path, std::ios::binary);

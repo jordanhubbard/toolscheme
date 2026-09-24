@@ -37,6 +37,58 @@ class LearningTest(unittest.TestCase):
     def snapshot(self, state):
         return json.loads((state / "learning-snapshot.json").read_text())
 
+    def evolve(self, state, name, body):
+        """Stand in for the replay gate publishing a proven tool."""
+        (state / "tools").mkdir(parents=True, exist_ok=True)
+        (state / "tools" / name).write_text(body)
+
+    def test_evolved_code_travels_but_is_never_adopted_automatically(self):
+        # The point of the store: a tool evolved on one host reaches every other
+        # one. The bound on it: arriving is not the same as running. Git is the
+        # transport so no server need be reachable from a hook, and that same
+        # reasoning forbids an incoming file becoming executable unasked.
+        self.evolve(self.a, "count-lines.scm",
+                    '(define-tool (list (list \'name "count_lines")))\n')
+        self.call(self.a, "sync")
+        self.call(self.b, "sync")
+
+        shared = self.b / "learning-tools" / "a" / "count-lines.scm"
+        self.assertTrue(shared.is_file(), "host b should see host a's tool")
+        self.assertFalse((self.b / "tools" / "count-lines.scm").exists(),
+                         "arriving must not put it in the load path")
+        listing = self.call(self.b, "tools").stdout
+        self.assertIn("a/count-lines.scm", listing)
+
+        self.call(self.b, "adopt", "a/count-lines.scm")
+        self.assertTrue((self.b / "tools" / "count-lines.scm").is_file())
+
+        # And onward: what b adopted, b offers as its own.
+        self.call(self.b, "sync")
+        self.call(self.a, "sync")
+        self.assertTrue((self.a / "learning-tools" / "b" / "count-lines.scm").is_file())
+
+    def test_adoption_refuses_traversal_absent_and_duplicate(self):
+        self.evolve(self.a, "ok.scm", "(define x 1)\n")
+        self.call(self.a, "sync")
+        self.call(self.b, "sync")
+        self.call(self.b, "adopt", "../../etc/passwd", ok=False)
+        self.call(self.b, "adopt", "a/../../escape.scm", ok=False)
+        self.call(self.b, "adopt", "a/missing.scm", ok=False)
+        self.call(self.b, "adopt", "a/ok.scm")
+        # Replacing an active tool is a decision, not a side effect of a sync.
+        self.call(self.b, "adopt", "a/ok.scm", ok=False)
+
+    def test_a_revised_tool_replaces_rather_than_collides(self):
+        # Records are immutable; code is not. A gate that improves a tool has to
+        # be able to publish the better one without the sync failing.
+        self.evolve(self.a, "t.scm", "(define version 1)\n")
+        self.call(self.a, "sync")
+        self.evolve(self.a, "t.scm", "(define version 2)\n")
+        self.call(self.a, "sync")
+        self.call(self.b, "sync")
+        self.assertIn("version 2",
+                      (self.b / "learning-tools" / "a" / "t.scm").read_text())
+
     def test_convergence_offline_recovery_and_revocation(self):
         self.call(self.a, "record", "read-bounds", "Read only the relevant range.")
         self.call(self.b, "record", "wait-events", "Wait for observable completion.")

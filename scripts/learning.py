@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Local learning journal and optional Git transport. Never run by a tool hook.
 
-Only immutable JSON records travel through Git. The hot path reads a bounded,
-atomically replaced snapshot; it never runs this program or waits for a remote.
+Immutable JSON records and replay-gated Scheme tools travel through Git. The hot
+path reads a bounded, atomically replaced snapshot and a directory of tools this
+host has adopted; it never runs this program or waits for a remote.
+
+Code is distributed but never adopted automatically. A tool another host evolved
+arrives on `sync` and sits in the shared area until `adopt` copies it into the
+load path. Git is the transport precisely so that no server has to be reachable
+from a hook, and the same reasoning says an incoming file must not become
+executable on this host without someone choosing it.
 """
 import argparse
 import collections
@@ -23,6 +30,10 @@ import uuid
 SCHEMA = 1
 MAX_BATCH = 4 * 1024 * 1024
 MAX_RECORD = 65536
+# A tool is source, reviewed by a person before adoption; the bound is there so a
+# sync cannot be made expensive by a large file rather than to constrain style.
+MAX_TOOL = 256 * 1024
+TOOL_NAME = re.compile(r"[a-zA-Z0-9_.-]{1,80}\.scm")
 
 
 def canonical(value):
@@ -254,6 +265,112 @@ def snapshot(state, repo):
     return value
 
 
+
+# --- Evolved Scheme code ------------------------------------------------------
+#
+# Three directories, and the distinction between them is the safety property:
+#
+#   state/tools/                 this host's active tools. Loaded by the
+#                                interpreter. Written by the replay gate, or by
+#                                `adopt`. Shared on the next sync.
+#   repo/tools/<host>/           the distributed graph. What every consumer sees
+#                                after a pull.
+#   state/learning-tools/<host>/ other hosts' tools, materialised locally and
+#                                deliberately inert until adopted.
+#
+# A tool reaching this host does not become code this host runs. That is the
+# whole reason the middle directory exists.
+
+
+def tool_files(directory):
+    if not directory.is_dir() or directory.is_symlink():
+        return
+    for path in sorted(directory.iterdir()):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if not TOOL_NAME.fullmatch(path.name):
+            continue
+        if path.stat().st_size > MAX_TOOL:
+            raise RuntimeError("shared tool too large: " + path.name)
+        yield path
+
+
+def share_tools(state, repo, host):
+    """Copy this host's active tools into the repository, unchanged."""
+    destination = repo / "tools" / host
+    if (repo / "tools").is_symlink() or destination.is_symlink():
+        raise RuntimeError("tool directories must not be symlinks")
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in tool_files(state / "tools"):
+        target = destination / path.name
+        source = path.read_bytes()
+        if not target.exists() or target.read_bytes() != source:
+            # Tools are revised rather than immutable: a replay gate that
+            # improves one should be able to publish the better version.
+            tmp = target.with_suffix(".scm.tmp")
+            tmp.write_bytes(source)
+            tmp.replace(target)
+
+
+def materialise_tools(state, repo, host):
+    """Make other hosts' tools visible locally, without making them runnable."""
+    shared = state / "learning-tools"
+    shared.mkdir(parents=True, exist_ok=True)
+    found = 0
+    source = repo / "tools"
+    if not source.is_dir():
+        return 0
+    for origin in sorted(source.iterdir()):
+        if origin.is_symlink() or not origin.is_dir() or origin.name == host:
+            continue
+        target = shared / origin.name
+        target.mkdir(parents=True, exist_ok=True)
+        for path in tool_files(origin):
+            (target / path.name).write_bytes(path.read_bytes())
+            found += 1
+    return found
+
+
+def list_tools(state, config):
+    host = config["host"]
+    mine = [p.name for p in tool_files(state / "tools")]
+    print("active on this host (loaded):")
+    for name in mine or ["  (none)"]:
+        print("  " + name if name in mine else name)
+    shared = state / "learning-tools"
+    print("shared by other hosts (not loaded; adopt to use):")
+    any_shared = False
+    if shared.is_dir():
+        for origin in sorted(shared.iterdir()):
+            if not origin.is_dir():
+                continue
+            for path in tool_files(origin):
+                any_shared = True
+                print("  " + origin.name + "/" + path.name)
+    if not any_shared:
+        print("  (none)")
+
+
+def adopt_tool(state, reference):
+    """Copy one shared tool into the load path. Deliberately one at a time."""
+    if "/" not in reference:
+        raise RuntimeError("name a tool as HOST/NAME.scm; see toolscheme learn tools")
+    origin, name = reference.split("/", 1)
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", origin) or not TOOL_NAME.fullmatch(name):
+        raise RuntimeError("invalid tool reference")
+    source = state / "learning-tools" / origin / name
+    if not source.is_file() or source.is_symlink():
+        raise RuntimeError("no such shared tool: " + reference)
+    destination = state / "tools"
+    destination.mkdir(parents=True, exist_ok=True)
+    target = destination / name
+    if target.exists():
+        raise RuntimeError(name + " is already active here; remove it first to replace it")
+    target.write_bytes(source.read_bytes())
+    print("Adopted " + reference + ". It loads on the next toolscheme invocation,")
+    print("and the next sync offers it onward as this host's.")
+
+
 def init(state, args):
     if (state / "learning-config.json").exists():
         raise RuntimeError("already initialized; existing configuration was preserved")
@@ -287,12 +404,14 @@ def sync(state, config):
         if target.exists() and read_json(target) != value:
             raise RuntimeError("immutable record collision")
         atomic(target, value)
-    git(repo, "add", "--", "records")
+    share_tools(state, repo, config["host"])
+    git(repo, "add", "--", "records", "tools")
     if git(repo, "diff", "--cached", "--quiet", check=False).returncode:
-        git(repo, "commit", "-m", "Record host learning sessions and steering")
+        git(repo, "commit", "-m", "Record host learning sessions, steering and tools")
     for path in pending:
         path.unlink()
     snapshot(state, repo)  # durable local progress even if fetch/push fails
+    materialise_tools(state, repo, config["host"])
     for attempt in range(3):
         git(repo, "fetch", "--no-tags", "origin")
         remote = git(repo, "rev-parse", "--verify", "refs/remotes/origin/main", check=False)
@@ -302,6 +421,7 @@ def sync(state, config):
                 git(repo, "merge", "--abort", check=False)
                 raise RuntimeError("learning merge conflict; local commits retained for review")
         snapshot(state, repo)
+        materialise_tools(state, repo, config["host"])
         if git(repo, "rev-parse", "--verify", "HEAD", check=False).returncode:
             print("No learning records yet.")
             return
@@ -358,6 +478,9 @@ def main():
     record.add_argument("id")
     record.add_argument("text", nargs="?", default="")
     record.add_argument("--disable", action="store_true")
+    sub.add_parser("tools", help="list active and shared tools")
+    take = sub.add_parser("adopt", help="copy a shared tool into the load path")
+    take.add_argument("reference", help="HOST/NAME.scm, as printed by `tools`")
     timer = sub.add_parser("schedule")
     timer.add_argument("--interval", type=int, default=300)
     args = parser.parse_args()
@@ -376,6 +499,10 @@ def main():
                 enqueue(state, config, dict(kind="steering", id=args.id, text=args.text,
                         enabled=not args.disable, revision=str(time.time_ns()).zfill(20) + "-" + uuid.uuid4().hex))
                 print("Learning saved locally; the next sync publishes it.")
+            elif args.command == "tools":
+                list_tools(state, config)
+            elif args.command == "adopt":
+                adopt_tool(state, args.reference)
             elif args.command == "schedule":
                 if args.interval < 60:
                     raise RuntimeError("sync interval must be at least 60 seconds")

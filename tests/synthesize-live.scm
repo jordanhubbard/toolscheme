@@ -80,7 +80,7 @@
                                         (list 'reason "no case survived translation"))
                                   (replay name cases render))))
                 (if (field-ref verdict 'publish)
-                    (begin (publish-tool-source tool-directory tool verdict)
+                    (begin (publish-tool-source (publishing-directory) tool verdict)
                            (list (list 'stage 'published)
                                  (list 'tool name)
                                  (list 'cache-read-tokens (field-ref written 'cache-read-tokens 0))

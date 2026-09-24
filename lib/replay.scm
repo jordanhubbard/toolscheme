@@ -164,6 +164,18 @@
           (list 'disagreement disagreement)
           (list 'results results))))
 
+;; Where a proven tool is written. The state directory when there is one, because
+;; that is what Git shares and what the interpreter loads; the library directory
+;; otherwise, which is a checkout being worked in.
+;;
+;; This is what makes an evolved tool durable beyond the machine that evolved it.
+;; Written here, it is live locally at once, offered to every other consumer on
+;; the next sync, and inert on each of them until someone adopts it.
+(define (publishing-directory)
+  (if (and (string? adopted-tool-directory) (not (string-null? adopted-tool-directory)))
+      adopted-tool-directory
+      tool-directory))
+
 ;; Publication is writing a reviewable file. The provenance header is part of the
 ;; artifact: which pattern motivated the tool, what the replay measured, and when.
 (define (publish-tool-source directory tool verdict)
