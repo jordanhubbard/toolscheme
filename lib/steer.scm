@@ -128,15 +128,33 @@
          (any? (lambda (word) (string-contains? command word)) loop-keywords)
          #t)))
 
+;; How many fixed waits pass between one mention and the next. Every long sleep
+;; records a mark whether or not it is advised, so this counts the waste rather
+;; than counting how often the hook has spoken about it -- the earlier version
+;; counted its own advice, which can only ever reach one.
+(define steer-sleep-advice-every 25)
+
+(define (sleep-advice-due? keys)
+  (= (remainder (count-key keys "SLEPT" "") steer-sleep-advice-every) 0))
+
 (define (advice-for request keys call)
   (let ((slept (sleeping-for request))
         (key (steer-key request)))
     (cond
       ((already-seen? keys call) #f)
-      ;; Said once per session: the point is made, and repeating it every call
-      ;; would cost more context than the advice saves.
+      ;; Repeated periodically rather than once, because once was measured and
+      ;; did not work. Over 7.4 days two sessions slept 1,169 times between them
+      ;; -- a median of 280 each and 889 in the worst -- and "once per session"
+      ;; meant those 1,169 waits received two mentions in total, the first of
+      ;; them scrolled out of context hundreds of sleeps earlier.
+      ;;
+      ;; The old rule was not wrong about the risk, only about the scale it was
+      ;; tuned for: repeating on every call would cost more than it saves, and a
+      ;; session that sleeps 889 times is not the session that rule imagined.
+      ;; One mention per 25 waits is about 4,000 tokens across such a session,
+      ;; against eleven hours spent waiting.
       ((and (>= slept steer-sleep-threshold-ms)
-            (= (count-key keys "ADVISED-SLEEP" "") 0))
+            (sleep-advice-due? keys))
        (list (list 'kind "ADVISED-SLEEP")
              (list 'text
                    ;; Naming the tool is not enough: advice the agent cannot act on
@@ -144,8 +162,16 @@
                    ;; exists to stop wasting. So it gives the command to run.
                    (string-append
                      "This waits a fixed " (number->string (quotient slept 1000))
-                     "s whether or not the thing you are waiting for has happened. "
-                     "`toolscheme` is on PATH and returns the moment it does:\n"
+                     "s whether or not the thing you are waiting for has happened."
+                     ;; Silent the first time, then counted. A running total is
+                     ;; what makes this concrete: the sessions that do this do it
+                     ;; hundreds of times, and each one looks individually cheap.
+                     (let ((so-far (count-key keys "SLEPT" "")))
+                       (if (= so-far 0)
+                           ""
+                           (string-append " That is " (number->string so-far)
+                                          " fixed waits in this session already.")))
+                     " `toolscheme` is on PATH and returns the moment it does:\n"
                      "  toolscheme -e '(wait-for (quote (exists \"some/path\")))'\n"
                      "  toolscheme -e '(wait-for (quote (matches \"some.log\" \"ready\")))'\n"
                      "It reports whether the condition was met or the deadline expired, "
@@ -167,7 +193,14 @@
                      "It takes (timeout-ms N) and reports whether the condition held or "
                      "the deadline expired."))))
       ;; Said every time, because it names a specific call and stays true.
-      ((> (count-key keys key call) 0)
+      ;;
+      ;; Except of a wait. "You already ran this, so you already have the answer"
+      ;; is true of a repeated `grep` and false of a repeated sleep: waiting again
+      ;; is what waiting looks like, and the answer is expected to change. The
+      ;; corpus had this firing on all 1,169 sleeps in it -- every one after the
+      ;; first -- which is both noise and wrong.
+      ((and (> (count-key keys key call) 0)
+            (< slept steer-sleep-threshold-ms))
        (list (list 'kind #f)
              (list 'text
                    (string-append
@@ -191,6 +224,11 @@
              (found (if (steer-enabled?) (advice-for request keys call) #f))
              (key (steer-key request)))
         (remember-key session key call)
+        ;; Marked for every long wait, advised or not, so the interval above
+        ;; measures waiting rather than talking.
+        (if (>= (sleeping-for request) steer-sleep-threshold-ms)
+            (remember-key session "SLEPT" call)
+            #f)
         (if (not found)
             shared
             (begin

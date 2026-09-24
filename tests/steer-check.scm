@@ -41,7 +41,27 @@
 (define background-then-wait (said (bash-request "s" "(sleep 25; touch ONE) & sleep 30") '()))
 
 (define sleep-advice (said (bash-request "s" "sleep 55") '()))
-(define sleep-again (said (bash-request "s" "sleep 45") '("EARLIER\tADVISED-SLEEP")))
+
+;; What "already said" now means. Once per session was measured against the real
+;; corpus and failed: two sessions slept 1,169 times between them and received two
+;; mentions in total, the first scrolled far out of context. So the mention
+;; repeats, paced by how much waiting has happened rather than by how often the
+;; hook has spoken -- counting its own advice can only ever reach one.
+(define (slept-marks n)
+  (let loop ((i 0) (acc '()))
+    (if (= i n) acc (loop (+ i 1) (cons (string-append "c" (number->string i) "\tSLEPT") acc)))))
+
+;; Quiet in between,
+(define sleep-again (said (bash-request "s" "sleep 45") (slept-marks 3)))
+;; and speaking again once enough waiting has accumulated.
+(define sleep-much-later (said (bash-request "s" "sleep 45") (slept-marks 25)))
+
+;; A repeated wait must not be told it already has the answer: waiting again is
+;; what waiting is, and the answer is expected to have changed. This fired on
+;; every one of the 1,169 sleeps in the corpus.
+(define repeated-sleep
+  (said (bash-request "s" "sleep 45")
+        (list (string-append (steer-key (bash-request "s" "sleep 45")) "\tc9"))))
 (define short-advice (said (bash-request "s" "sleep 2") '()))
 
 ;; A repeat is judged on the whole invocation: two greps for different patterns are
@@ -113,7 +133,12 @@
         (list 'advises-on-polling-loop (and poll-advice #t))
         (list 'silent-on-backgrounded-work (not background-only))
         (list 'advises-on-the-wait-beside-it (and background-then-wait #t))
-        (list 'silent-when-already-said (not sleep-again))
+        (list 'silent-between-mentions (not sleep-again))
+        (list 'speaks-again-once-waiting-accumulates (and sleep-much-later #t))
+        (list 'a-repeated-wait-is-not-called-redundant
+              (if repeated-sleep
+                  (not (string-contains? repeated-sleep "already have the answer"))
+                  #t))
         (list 'silent-on-short-sleep (not short-advice))
         (list 'advises-on-repeat (and repeat-advice #t))
         (list 'silent-on-different-argument (not no-repeat))
@@ -140,6 +165,9 @@
                  (not background-only)
                  (and background-then-wait #t)
                  (not sleep-again)
+                 (and sleep-much-later #t)
+                 (or (not repeated-sleep)
+                     (not (string-contains? repeated-sleep "already have the answer")))
                  (not short-advice)
                  (and repeat-advice #t)
                  (not no-repeat)
