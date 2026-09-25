@@ -110,9 +110,22 @@
 ;; Split from the env check so the policy can be exercised directly: whether
 ;; redirection is switched on is a deployment question, whether a given command
 ;; may be rewritten is the part worth testing.
+;; The substitute runs rooted at the directory the agent is working in, so a
+;; command naming an absolute path outside it reads fine as a shell command and
+;; fails as a tool. Measured: `cat /tmp/outside.txt` gives cat 21 bytes and exit
+;; 0, and the tool exit 1 -- visible rather than silent, and still not what the
+;; agent asked for. A command the substitute cannot reach is left alone.
+(define (rewrite-reachable? text cwd)
+  (or (string-null? cwd)
+      (not (any? (lambda (word)
+                   (and (string-prefix? "/" word)
+                        (not (string-prefix? cwd word))))
+                 (string-split text " ")))))
+
 (define (redirect-rewrite request)
   (let* ((input (field-ref request "tool_input" '()))
-         (text (hook-command-of input)))
+         (text (hook-command-of input))
+         (cwd (field-ref request "cwd" "")))
     (if (string-null? text)
         #f
         (let ((tool (tool-for-command text)))
@@ -120,7 +133,9 @@
           ;; would be faithful; this one says it would be worth taking, because a
           ;; silent substitution on a call that prints nothing buys nothing and
           ;; risks the same as one that prints a screenful.
-          (if (or (not tool) (not (worth-redirecting? text)))
+          (if (or (not tool)
+                  (not (worth-redirecting? text))
+                  (not (rewrite-reachable? text cwd)))
               #f
               (list (list "hookSpecificOutput"
                           (list (list "hookEventName" "PreToolUse")
