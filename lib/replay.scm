@@ -196,4 +196,17 @@
                                                   (field-ref verdict 'candidate-bytes 0))))
                    "\n;;;\n"
                    ";;; Written by a model and gated by replay; edit freely.\n\n")))
-    (write-file path (string-append header (field-ref tool "scheme_source" "") "\n"))))
+    ;; The destination may not exist yet: a host that has never published has no
+    ;; tools directory, and that is the common case rather than the odd one.
+    (catch-errors (lambda () (mkdir directory '((parents #t)))))
+    ;; Checked, because the destination is often outside the sandbox the loop
+    ;; runs in: publishing aims at the state directory while synthesis is rooted
+    ;; at the corpus, and write-file reports that refusal by returning an error
+    ;; rather than raising it. A gate that approves a tool and then loses it is
+    ;; worse than one that refuses, because it reports success either way.
+    (let ((written (write-file path (string-append header
+                                                   (field-ref tool "scheme_source" "")
+                                                   "\n"))))
+      (if (error? written)
+          written
+          (list (list 'published path))))))

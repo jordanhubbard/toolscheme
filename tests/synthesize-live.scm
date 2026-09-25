@@ -98,11 +98,21 @@
                                         (list 'reason "no case survived translation"))
                                   (replay name cases render))))
                 (if (field-ref verdict 'publish)
-                    (begin (publish-tool-source (publishing-directory) tool verdict)
-                           (list (list 'stage 'published)
-                                 (list 'tool name)
-                                 (list 'cache-read-tokens (field-ref written 'cache-read-tokens 0))
-                                 (list 'verdict verdict)))
+                    (let ((saved (publish-tool-source (publishing-directory) tool verdict)))
+                      (if (error? saved)
+                          ;; Approved and then lost. Reported as its own stage,
+                          ;; because "published" that wrote nothing is the one
+                          ;; outcome a reader would never think to check.
+                          (list (list 'stage 'publication-failed)
+                                (list 'tool name)
+                                (list 'directory (publishing-directory))
+                                (list 'outcome saved)
+                                (list 'verdict verdict))
+                          (list (list 'stage 'published)
+                                (list 'tool name)
+                                (list 'path (field-ref saved 'published ""))
+                                (list 'cache-read-tokens (field-ref written 'cache-read-tokens 0))
+                                (list 'verdict verdict))))
                     ;; A refusal used to report the tool and the disagreement and
                     ;; nothing else, which points the reader at the tool -- and
                     ;; the tool is usually not where the fault is. Twice now the

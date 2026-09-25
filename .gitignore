@@ -16,3 +16,4 @@ vendor/
 dist/
 __pycache__/
 .check-root/
+.mini/

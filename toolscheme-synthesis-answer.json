@@ -1,0 +1,10 @@
+{
+  "name": "read_text",
+  "description": "Read inline text or one tagged file source with a character limit and structured truncation information.",
+  "scheme_source": "(define-tool (list (list 'name \"read_text\") (list 'description \"Read inline text or one file with a character limit.\") (list 'parameters (list (list \"source\" \"any\" \"Inline text or (files path).\" #t) (list \"limit\" \"integer\" \"Maximum returned characters; defaults to 1048576.\" #f))) (list 'procedure (lambda (arguments) (let* ((source (field-ref arguments \"source\" \"\")) (limit (field-ref arguments \"limit\" 1048576)) (text (if (string? source) source (field-ref (read-file (list-ref source 2)) 'text \"\"))) (total (string-length text)) (count (min total (max 0 limit)))) (list (list \"text\" (list->string (list-head (string->list text) count))) (list \"total_characters\" total) (list \"returned_characters\" count) (list \"truncated\" (< count total))))))))",
+  "replaces_pattern": "cat PATH, with exactly one simple, unquoted file path and no options, redirections, pipelines, or compound commands.",
+  "rationale": "Avoids shell startup and returns bounded text with explicit truncation metadata in one call.",
+  "stability_contract": "For identical arguments and unchanged file contents, every result field and its ordering is deterministic. The limit counts characters; no host metadata is returned. Legacy rendering is exact when truncated is false.",
+  "translate_source": "(lambda (command) (let ((parts (string-split (string-trim command) \" \"))) (if (and (= (length parts) 2) (string=? (list-ref parts 1) \"cat\")) (let ((path (list-ref parts 2))) (if (and (> (string-length path) 0) (not (string-prefix? \"-\" path)) (not (string-contains? path \"..\")) (= (length (filter (lambda (ch) (or (char-alphabetic? ch) (char-numeric? ch) (char=? ch #\\/) (char=? ch #\\.) (char=? ch #\\_) (char=? ch #\\-))) (string->list path))) (string-length path))) (list (list \"source\" (list 'files path)) (list \"limit\" 1048576)) #f)) #f)))",
+  "legacy_form_source": "(lambda (result) (field-ref result \"text\" \"\"))"
+}
