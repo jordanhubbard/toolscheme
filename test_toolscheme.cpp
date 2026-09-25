@@ -1322,6 +1322,27 @@ static void milestone_1_shell_parse(Interpreter& vm) {
     raises(vm, "(shell-parse 42)", "expects a string", "m1 shell-parse needs a string");
 }
 
+static void content_cache(Interpreter& vm) {
+    // A cache that can serve a stale byte is worse than no cache, so what is
+    // checked here is invalidation, not speed. The fingerprint is device,
+    // inode, size and mtime to the nanosecond; a same-length rewrite changes
+    // only the last of those and is the case a size check alone would miss.
+    vm.eval("(write-file \"cache-probe.txt\" \"one\\n\")");
+    check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy() == false,
+          "m2 a first read is not cached");
+    check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy(),
+          "m2 a repeat read is served from the cache");
+    // The property the whole thing rests on.
+    vm.eval("(write-file \"cache-probe.txt\" \"two\\n\")");
+    check(vm.write(vm.eval("(field-ref (read-file \"cache-probe.txt\") 'text)")) == "\"two\\n\"",
+          "m2 a same-length rewrite is not served from the cache");
+    // And the contract it must not break: `cached` is volatile, so an ordinary
+    // repeat call is byte-identical whether or not it was a hit.
+    check(vm.eval("(equal? (read-file \"cache-probe.txt\") (read-file \"cache-probe.txt\"))").truthy(),
+          "m2 caching leaves repeated results byte-identical");
+    vm.eval("(rm '(\"cache-probe.txt\"))");
+}
+
 static void milestone_1_platform_facts(Interpreter& vm) {
     // A generated tool branches on what the host can do, not on a platform name.
     const Value facts = vm.eval("(platform-facts)");
@@ -1632,6 +1653,7 @@ int main() {
     milestone_0_git(vm);
     milestone_1_process_directory(vm);
     milestone_1_shell_parse(vm);
+    content_cache(vm);
     milestone_1_platform_facts(vm);
     milestone_1_telemetry(vm);
     milestone_1_published_tools(vm);

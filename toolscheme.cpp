@@ -1818,7 +1818,13 @@ bool option_flag_default(const Value& options, std::string_view name, bool fallb
 // a handle -- are never stripped, however volatile they are.
 bool volatile_field(std::string_view name) {
     return name == "modified" || name == "accessed" || name == "changed" ||
-           name == "inode" || name == "elapsed-ms";
+           name == "inode" || name == "elapsed-ms" ||
+           // Whether an answer came from the cache is incidental to the answer.
+           // It has to be stripped by default or the stability contract breaks
+           // on the very first repeat: the same call would return one field the
+           // first time and two the second, which is exactly the churn the
+           // contract exists to prevent.
+           name == "cached";
 }
 
 Value filter_record(const Value& value, const std::set<std::string>& keep, bool drop_volatile);
