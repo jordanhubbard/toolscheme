@@ -164,6 +164,48 @@
           (list 'disagreement disagreement)
           (list 'results results))))
 
+;; The evidence the gate just computed, in the shape redirection reads: one row
+;; per command shape, with how many cases carried it and how many agreed.
+;;
+;; Without this a published tool can never be used. `redirect.scm` will only
+;; rewrite a command when a tool claims its shapes and carries agreement on all
+;; of them, and the loop was computing exactly that and then throwing it away --
+;; so every tool it published was correct, loadable, and unreachable.
+(define (proven-rows verdict)
+  (let* ((results (filter (lambda (r) (not (eq? (field-ref r 'verdict) 'skipped)))
+                          (field-ref verdict 'results '())))
+         (shapes (fold-left (lambda (seen shape) (if (member shape seen) seen (cons shape seen)))
+                            '()
+                            (flatten (map (lambda (r) (command-shapes (field-ref r 'command "")))
+                                          results)))))
+    (map (lambda (shape)
+           (let* ((carrying (filter (lambda (r) (member shape (command-shapes
+                                                                (field-ref r 'command ""))))
+                                    results))
+                  (agreed (count-if (lambda (r) (eq? (field-ref r 'verdict) 'agrees)) carrying)))
+             (list (list 'shape shape)
+                   (list 'cases (length carrying))
+                   (list 'agreed agreed)
+                   (list 'worthwhile agreed))))
+         shapes)))
+
+;; The model returns a complete define-tool form, and the fields redirection needs
+;; are not its to know: they come from the replay that has just happened. They are
+;; inserted rather than asked for, so the model cannot claim evidence for itself.
+(define (with-proven-fields source name verdict)
+  (let ((opening (string-index source "(list ")))
+    (if (not opening)
+        source
+        (string-append
+          (substring source 1 (+ opening 5))
+          "\n                   (list 'shapes '"
+          (write-to-string (map (lambda (row) (field-ref row 'shape "")) (proven-rows verdict)))
+          ")\n                   (list 'proven '"
+          (write-to-string (proven-rows verdict))
+          ")\n                   (list 'translate \"" name "-translate\")"
+          "\n                   (list 'legacy-form \"" name "-legacy-form\")"
+          (substring source (+ opening 6) (string-length source))))))
+
 ;; Where a proven tool is written. The state directory when there is one, because
 ;; that is what Git shares and what the interpreter loads; the library directory
 ;; otherwise, which is a checkout being worked in.
@@ -204,9 +246,18 @@
     ;; at the corpus, and write-file reports that refusal by returning an error
     ;; rather than raising it. A gate that approves a tool and then loses it is
     ;; worse than one that refuses, because it reports success either way.
-    (let ((written (write-file path (string-append header
-                                                   (field-ref tool "scheme_source" "")
-                                                   "\n"))))
+    ;; The two harness procedures are written beside the tool and named, because
+    ;; redirection calls them by name: without them on disk a rewrite has no way
+    ;; to turn a command into arguments, or the answer back into what the shell
+    ;; would have printed.
+    (let* ((body (string-append
+                   "(define " name "-translate\n"
+                   (field-ref tool "translate_source" "") ")\n\n"
+                   "(define " name "-legacy-form\n"
+                   (field-ref tool "legacy_form_source" "") ")\n\n"
+                   (with-proven-fields (field-ref tool "scheme_source" "") name verdict)
+                   "\n"))
+           (written (write-file path (string-append header body))))
       (if (error? written)
           written
           (list (list 'published path))))))
