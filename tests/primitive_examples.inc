@@ -23,6 +23,7 @@
 {"abs", "(abs -3)", "(abs \"x\")"},
 {"append", "(append '(1) '(2))", "(append 1 '(2))"},
 {"apply", "(apply + '(1 2))", "(apply + 1)"},
+{"apropos", "(apropos \"tally\")", "(apropos 1 2)"},
 {"apply-patch", "(apply-patch PATCH '((dry-run #t)))", "(apply-patch \"not a patch\")"},
 {"assoc", "(assoc 'b '((a 1) (b 2)))", "(assoc 'a)"},
 {"assq", "(assq 'a '((a 1)))", "(assq 'a)"},

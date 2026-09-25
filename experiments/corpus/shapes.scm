@@ -21,12 +21,11 @@
                   acc)))))
     '() lines))
 
-;; Counting by key. There is no tally primitive, so this is the accumulator that
-;; every one of the Python versions wrote as `collections.Counter`.
-(define (tally-add table key)
-  (let ((seen (field-ref table key 0)))
-    (cons (list key (+ seen 1))
-          (filter (lambda (row) (not (equal? (car row) key))) table))))
+;; Counting by key uses the library's `tally`, which sorts and groups runs.
+;; This script originally hand-rolled an accumulator that rebuilt an association
+;; list per key, because `tally` could not be found -- it is Scheme, and
+;; `primitive-names` lists only what C++ installed. The hand-rolled version was
+;; six times slower for the same answer. `(apropos "tally")` now says so.
 
 (define (classify command)
   (let ((parsed (catch-errors (lambda () (shell-parse command)))))
@@ -39,24 +38,19 @@
                 ((> count 1) 'compound)
                 (else 'plain))))))
 
-(define shapes
-  (fold-left (lambda (table command) (tally-add table (classify command)))
-             '() commands))
+;; `tally` wants strings, and the classifier answers in symbols.
+(define shapes (tally (map (lambda (c) (symbol->string (classify c))) commands)))
 
 ;; The first program of each line, which is what a replacement would have to be.
-(define programs
-  (fold-left
-    (lambda (table command)
-      (let ((parsed (catch-errors (lambda () (shell-parse command)))))
-        (if (error? parsed)
-            table
-            (let ((names (field-ref parsed 'programs '())))
-              (if (null? names) table (tally-add table (car names)))))))
-    '() commands))
+(define (first-program command)
+  (let ((parsed (catch-errors (lambda () (shell-parse command)))))
+    (if (error? parsed)
+        "?"
+        (let ((names (field-ref parsed 'programs '())))
+          (if (null? names) "?" (car names))))))
 
-(define (top table n)
-  (take (list-sort table (lambda (a b) (> (car (cdr a)) (car (cdr b))))) n))
+(define programs (tally (map first-program commands)))
 
 (list (list 'commands (length commands))
-      (list 'shapes (list-sort shapes (lambda (a b) (> (car (cdr a)) (car (cdr b))))))
-      (list 'top-programs (top programs 12)))
+      (list 'shapes (ranked shapes))
+      (list 'top-programs (top (ranked programs) 12)))

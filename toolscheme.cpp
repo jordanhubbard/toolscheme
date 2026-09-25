@@ -2172,6 +2172,23 @@ bool Interpreter::has_primitive(std::string_view name) const {
     return impl_->primitives.count(std::string(name)) != 0;
 }
 
+// Everything bound at the top level, primitives and library alike.
+//
+// `primitive_names` lists only what C++ installed, which is the smaller and less
+// useful half: the helpers that make the library pleasant to use -- tally,
+// ranked, group-runs -- are Scheme, and were invisible to anyone looking. The
+// cost of that was measured rather than guessed: an analysis written against
+// this corpus hand-rolled its own counting because `tally` could not be found,
+// and the hand-rolled version was six times slower and rebuilt an association
+// list per key.
+std::vector<std::string> Interpreter::global_names() const {
+    std::vector<std::string> out;
+    out.reserve(impl_->global->values.size());
+    for (const auto& entry : impl_->global->values) out.push_back(entry.first);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Core procedures
 // ---------------------------------------------------------------------------
@@ -3028,6 +3045,22 @@ void register_core(Interpreter& interpreter) {
         std::vector<Value> out;
         for (const std::string& name : vm.primitive_names()) out.push_back(Value::symbol(name));
         return Value::list(std::move(out));
+    });
+    // Finding out whether the thing you are about to write already exists.
+    //
+    // Without this the answer was "read the library", and the observed result of
+    // that was a hand-rolled counter six times slower than the `tally` sitting
+    // three files away. Matching on a substring rather than a prefix because the
+    // name you remember is rarely the start of the one you want.
+    add("apropos", [](Interpreter& vm, const std::vector<Value>& a) {
+        arity_between(a, 0, 1, "apropos");
+        const std::string needle =
+            a.empty() ? std::string() : std::string(want_string(a[0], "apropos"));
+        std::vector<Value> out;
+        for (const std::string& name : vm.global_names())
+            if (needle.empty() || name.find(needle) != std::string::npos)
+                out.push_back(Value::symbol(name));
+        return ok_result({field("names", Value::list(std::move(out)))});
     });
     // Results are association lists, so field lookup is the most common operation an
     // embedder performs on them.

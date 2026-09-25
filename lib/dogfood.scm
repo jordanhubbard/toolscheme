@@ -100,9 +100,14 @@
                                         "This tree is toolscheme's own, and `" offender
                                         "` is one of the tools it exists to replace. Use:\n  "
                                         (dogfood-equivalent offender)
-                                        "\n\nIf toolscheme cannot express what you need, that is "
-                                        "the finding: add the capability and commit it, rather "
-                                        "than working around it here. Unset TOOLSCHEME_DOGFOOD "
-                                        "to lift this."))))))))))
+                                        "\n\n(apropos \"name\") lists every top-level binding "
+                                        "matching a substring, library included -- check there "
+                                        "before concluding something is missing. The first "
+                                        "analysis written under this rule hand-rolled a counter "
+                                        "six times slower than the `tally` it could not find."
+                                        "\n\nIf toolscheme genuinely cannot express what you "
+                                        "need, that is the finding: add the capability and commit "
+                                        "it, rather than working around it here. Unset "
+                                        "TOOLSCHEME_DOGFOOD to lift this."))))))))))
 
 (define (dogfood-decision request) (dogfood-refusal request (dogfood-roots)))

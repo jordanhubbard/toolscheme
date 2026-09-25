@@ -271,6 +271,9 @@ public:
     Value list(const std::vector<Value>& values);
     Value apply(const Value& procedure, const std::vector<Value>& arguments);
     std::vector<std::string> primitive_names() const;
+    // Every top-level binding, including the Scheme library. What a caller
+    // actually wants when asking "does this already exist?".
+    std::vector<std::string> global_names() const;
     bool has_primitive(std::string_view name) const;
 
     // Mints an unforgeable handle whose written form is an evaluable reference.
