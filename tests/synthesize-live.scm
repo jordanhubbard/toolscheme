@@ -26,6 +26,24 @@
 
 (define report (analyze-sessions (list transcript-directory)))
 
+(define (attempt-with-repair opportunity)
+  ;; A candidate that will not even parse is the commonest outcome with a small
+  ;; model, and the model is never told. One repair round costs a request and
+  ;; turns the most frequent failure into a second chance; more than one would be
+  ;; asking the same model the same thing and hoping.
+  (let ((first (attempt opportunity)))
+    (if (not (eq? (field-ref first 'stage) 'evaluation))
+        first
+        (let* ((reason (field-ref (field-ref first 'outcome '()) 'error ""))
+               (second (attempt opportunity reason)))
+          (if (eq? (field-ref second 'stage) 'evaluation)
+              (list (list 'stage 'evaluation)
+                    (list 'tool (field-ref second 'tool ""))
+                    (list 'outcome (field-ref second 'outcome '()))
+                    (list 'repair-attempted #t)
+                    (list 'source (field-ref second 'source "")))
+              (append second (list (list 'repair-attempted #t))))))))
+
 (define chosen
   (let loop ((rest (field-ref report 'opportunities '())))
     (cond ((null? rest) #f)
@@ -56,8 +74,8 @@
                              (list 'arguments arguments))))))
          samples)))
 
-(define (attempt opportunity)
-  (let ((written (synthesize opportunity)))
+(define (attempt opportunity . rest)
+  (let ((written (synthesize opportunity (if (null? rest) "" (car rest)))))
     (if (error? written)
         (list (list 'stage 'synthesis) (list 'outcome written))
         (let* ((tool (field-ref written 'tool))
@@ -99,4 +117,4 @@
     (list (list 'opportunity (list (list 'pattern (field-ref chosen 'pattern))
                                    (list 'occurrences (field-ref chosen 'occurrences))
                                    (list 'samples (field-ref chosen 'samples))))
-          (list 'result (attempt chosen))))
+          (list 'result (attempt-with-repair chosen))))

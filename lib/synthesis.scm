@@ -22,7 +22,15 @@
 ;; understands, fails as a 401 that reads like a bad key. Before this, setting
 ;; only ANTHROPIC_API_KEY produced exactly that: the header followed the
 ;; credential and the other two did not, so the fallback path had never worked.
-(define (llm-via-gateway?) (if (setting "NVIDIA_INFERENCE_API_KEY") #t #f))
+;; A variable set to the empty string is not a credential. Only #f is false here,
+;; so an unset-but-exported key -- which is exactly what a shell wrapper produces
+;; when its lookup finds nothing -- would otherwise read as present and route the
+;; request to a host that has no key for it.
+(define (credential-value name)
+  (let ((found (setting name)))
+    (if (and (string? found) (not (string-null? (string-trim found)))) (string-trim found) #f)))
+
+(define (llm-via-gateway?) (if (credential-value "NVIDIA_INFERENCE_API_KEY") #t #f))
 
 (define synthesis-endpoint
   (or (env-value "TOOLSCHEME_SYNTHESIS_ENDPOINT")
@@ -45,8 +53,8 @@
 ;; environment would mean the credential is present when a human runs the tool
 ;; and absent when the hook does -- working in every test and never in practice.
 (define (synthesis-credential)
-  (let ((gateway (setting "NVIDIA_INFERENCE_API_KEY"))
-        (anthropic (setting "ANTHROPIC_API_KEY")))
+  (let ((gateway (credential-value "NVIDIA_INFERENCE_API_KEY"))
+        (anthropic (credential-value "ANTHROPIC_API_KEY")))
     (cond (gateway (list (list 'key gateway) (list 'header "authorization")
                          (list 'value (string-append "Bearer " gateway))))
           (anthropic (list (list 'key anthropic) (list 'header "x-api-key")
@@ -104,11 +112,37 @@
     "exist, and a tool that calls it is rejected before it is ever replayed.\n"
     "Note that list-ref and string-ref are 1-based, only #f is false, and every\n"
     "tool takes exactly one argument: a record of (name value) fields.\n"
+    ;; Written from what a real run got wrong. A weaker model follows the
+    ;; contract and then reaches for Scheme it knows from elsewhere -- assoc,
+    ;; a two-argument catch-errors, a read-file that returns a string -- and
+    ;; every one of those fails the gate for a reason the model never sees.
+    ;; Stating the idioms costs a few cached tokens and is the difference
+    ;; between a candidate that can be judged and one that cannot run.
+    "\nRead arguments and results with field-ref, never assoc or cadr:\n"
+    "  (field-ref arguments \"path\" \"\")        ; missing reads as the default\n"
+    "Primitives return records, not strings. read-file gives a record whose\n"
+    "text is in the 'text field:\n"
+    "  (field-ref (read-file path) 'text \"\")\n"
+    "catch-errors takes one thunk and returns either the value or an error\n"
+    "record; test it with error?:\n"
+    "  (let ((r (catch-errors (lambda () (read-file path)))))\n"
+    "    (if (error? r) (list (list \"error\" #t)) (list (list \"text\" ...))))\n"
     "\n\nReturn a complete define-tool form, for example:\n"
     "(define-tool (list (list 'name \"search_read\")\n"
     "                   (list 'description \"...\")\n"
     "                   (list 'parameters (list (list \"pattern\" \"string\" \"...\" #t)))\n"
     "                   (list 'procedure (lambda (arguments) ...))))\n"
+    "\ntranslate_source is where candidates most often die. It receives one\n"
+    "recorded command string and returns the argument record, or #f when that\n"
+    "command is not one this tool can take -- a compound command, a pipeline,\n"
+    "anything with a shape you did not plan for. Returning #f skips that case;\n"
+    "raising kills the candidate. Write it to recognise the simple form and\n"
+    "decline everything else:\n"
+    "  (lambda (command)\n"
+    "    (let ((parts (string-split (string-trim command) \" \")))\n"
+    "      (if (and (= (length parts) 2) (string=? (list-ref parts 1) \"cat\"))\n"
+    "          (list (list \"path\" (list-ref parts 2)))\n"
+    "          #f)))\n"
     "\nThe tool will be proved against the command it replaces by replaying real\n"
     "recorded invocations, so it is not enough to write it: supply also\n"
     "translate_source, which turns one of those recorded command strings into the\n"
@@ -117,7 +151,12 @@
     "that rendering. If they disagree on any recorded case the tool is refused,\n"
     "however much cheaper it is.\n"))
 
-(define (synthesis-request opportunity)
+(define (synthesis-request opportunity . rest)
+  ;; An optional previous failure. The candidate is thrown away and rewritten
+  ;; rather than patched, but the model is told what went wrong -- otherwise the
+  ;; same mistake is as likely the second time, and the commonest one by far is
+  ;; a define-tool form that is one closing parenthesis short.
+  (let ((failure (if (null? rest) "" (car rest))))
   (list
     (list "model" synthesis-model)
     ;; Three Scheme procedures in one structured object is a lot of output, and a
@@ -139,16 +178,23 @@
                               "Write one replacement tool for this measured pattern.\n\n"
                               (write-to-string opportunity)
                               "\n\nThe `samples` are real recorded invocations; your\n"
-                              "translate_source must handle them.\n")))))))
+                              "translate_source must handle them.\n"
+                              (if (string-null? failure)
+                                  ""
+                                  (string-append
+                                    "\nA previous attempt failed with:\n  " failure
+                                    "\nWrite it again and avoid that. Count the closing\n"
+                                    "parentheses of every form before returning.\n"))))))))))
 
-(define (synthesize opportunity)
-  (let ((credential (synthesis-credential)))
+(define (synthesize opportunity . rest)
+  (let ((credential (synthesis-credential))
+        (failure (if (null? rest) "" (car rest))))
     (if (not credential)
         (list (list 'error
                     "no synthesis credential: set NVIDIA_INFERENCE_API_KEY or ANTHROPIC_API_KEY")
               (list 'code 'capability-missing)
               (list 'operation 'synthesize))
-        (let* ((body (field-ref (json-write (synthesis-request opportunity)) 'text))
+        (let* ((body (field-ref (json-write (synthesis-request opportunity failure)) 'text))
                (response (http-request
                            (list (list 'url synthesis-endpoint)
                                  (list 'method "POST")
