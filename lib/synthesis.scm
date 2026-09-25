@@ -186,9 +186,105 @@
                                     "\nWrite it again and avoid that. Count the closing\n"
                                     "parentheses of every form before returning.\n"))))))))))
 
+
+;; --- Synthesis through a coding CLI ------------------------------------------
+;;
+;; A CLI that is already logged in removes the credential from this project
+;; entirely, and reaches whatever model that subscription reaches rather than
+;; whatever an API key is rated for -- which is the difference between a
+;; candidate that can be judged and one that cannot, when the key at hand is
+;; rate-limited down to the smallest model.
+;;
+;; It is the wrong instrument on the hook path and the right one here. Measured:
+;; `codex exec` is 7.6s idle and 49s on real work, against 1.7s for the direct
+;; call, and it spends 11k tokens of system prompt before reading the question.
+;; Synthesis happens rarely and offline, so none of that matters; a per-call
+;; classifier would die of it.
+(define (synthesis-cli)
+  (let ((named (setting "TOOLSCHEME_SYNTHESIS_CLI")))
+    (if (and (string? named) (not (string-null? named))) named #f)))
+
+;; The CLI resolves paths against its own working directory, not this sandbox, so
+;; every path handed to it has to be absolute. A relative one does not fail: it
+;; hangs until something kills it, which cost five minutes to find out.
+(define (rooted-path relative)
+  (string-append capability-root "/" relative))
+
+(define (synthesis-prompt opportunity failure)
+  (string-append
+    (synthesis-brief)
+    "\n\nWrite one replacement tool for this measured pattern.\n\n"
+    (write-to-string opportunity)
+    "\n\nThe `samples` are real recorded invocations; your translate_source\n"
+    "must handle them. Return only the structured object.\n"
+    (if (string-null? failure)
+        ""
+        (string-append "\nA previous attempt failed with:\n  " failure
+                       "\nWrite it again and avoid that. Count the closing\n"
+                       "parentheses of every form before returning.\n"))))
+
+(define (synthesize-via-cli opportunity failure)
+  (let* ((schema-file "toolscheme-synthesis-schema.json")
+         (answer-file "toolscheme-synthesis-answer.json")
+         (wrote (catch-errors
+                  (lambda ()
+                    (write-file schema-file
+                                (field-ref (json-write synthesis-schema) 'text))))))
+    (if (error? wrote)
+        wrote
+        (let* ((started (catch-errors
+                          (lambda ()
+                            (process-start
+                              (list (list 'program (synthesis-cli))
+                                    (list 'arguments
+                                          (list "exec" "--skip-git-repo-check"
+                                                "--output-schema" (rooted-path schema-file)
+                                                "-o" (rooted-path answer-file)
+                                                (synthesis-prompt opportunity failure)))
+                                    ;; Generous: the measured run took 49s and a
+                                    ;; harder pattern will take longer. A hook
+                                    ;; budget has no bearing on an offline loop.
+                                    (list 'timeout-ms 900000)))))))
+          (if (error? started)
+              started
+              ;; A CLI reads its prompt from stdin as well as from argv, and a
+              ;; child handed an open pipe waits on it forever -- `codex exec`
+              ;; says "Reading additional input from stdin..." and is then killed
+              ;; by the timeout, which looks like a hang rather than a handshake.
+              ;; Closing the pipe is the whole fix.
+              (let* ((closed (catch-errors
+                               (lambda () (process-close-input (field-ref started 'job)))))
+                     (finished (catch-errors
+                                 (lambda () (process-wait (field-ref started 'job))))))
+                (if (error? finished)
+                    finished
+                    (let ((answer (catch-errors
+                                    (lambda () (read-file answer-file '((limit 262144)))))))
+                      (if (error? answer)
+                          (list (list 'error "the CLI wrote no structured answer")
+                                (list 'code 'malformed)
+                                (list 'operation 'synthesize)
+                                ;; `exit-status`, not `status`: reading the wrong
+                                ;; name reported -1 for every failure and said
+                                ;; nothing about a process killed at 137.
+                                (list 'exit-status (field-ref finished 'exit-status -1))
+                                (list 'timed-out (field-ref finished 'timed-out #f))
+                                (list 'stderr (field-ref finished 'stderr "")))
+                          (let ((parsed (json-parse (field-ref answer 'text ""))))
+                            (if (error? parsed)
+                                parsed
+                                (list (list 'tool (field-ref parsed 'value))
+                                      ;; No cache accounting through a CLI; the
+                                      ;; field stays so callers need not branch.
+                                      (list 'cache-read-tokens 0)))))))))))))
+
 (define (synthesize opportunity . rest)
-  (let ((credential (synthesis-credential))
-        (failure (if (null? rest) "" (car rest))))
+  (if (synthesis-cli)
+      (synthesize-via-cli opportunity (if (null? rest) "" (car rest)))
+      (synthesize-over-http opportunity (if (null? rest) "" (car rest)))))
+
+(define (synthesize-over-http opportunity failure)
+  (let ((credential (synthesis-credential)))
     (if (not credential)
         (list (list 'error
                     "no synthesis credential: set NVIDIA_INFERENCE_API_KEY or ANTHROPIC_API_KEY")
