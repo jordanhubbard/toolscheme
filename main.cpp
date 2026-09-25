@@ -118,7 +118,7 @@ bool load_library(Interpreter& vm, const std::string& directory, std::string& er
                                   "replay.scm", "synthesis.scm", "mcp.scm", "hooks.scm",
                                   "redirect.scm", "steer.scm", "continue.scm",
                                   "codex.scm", "classify.scm",
-                                  "dogfood.scm"};
+                                  "dogfood.scm", "pipeline.scm"};
     for (const char* name : files) {
         const std::string path = directory + "/" + name;
         std::ifstream input(path, std::ios::binary);
