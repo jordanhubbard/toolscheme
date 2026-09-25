@@ -1328,14 +1328,22 @@ static void content_cache(Interpreter& vm) {
     // inode, size and mtime to the nanosecond; a same-length rewrite changes
     // only the last of those and is the case a size check alone would miss.
     vm.eval("(write-file \"cache-probe.txt\" \"one\\n\")");
+    // Admitted on the second sight, not the first: over the recorded corpus,
+    // 894 of 2,089 reads were of files never read again, and copying those in
+    // made the replay three times slower than no cache at all. So the first two
+    // reads miss -- the second is what admits it -- and the third hits.
     check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy() == false,
           "m2 a first read is not cached");
+    check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy() == false,
+          "m2 a second read admits but does not yet serve");
     check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy(),
-          "m2 a repeat read is served from the cache");
+          "m2 a third read is served from the cache");
     // The property the whole thing rests on.
     vm.eval("(write-file \"cache-probe.txt\" \"two\\n\")");
     check(vm.write(vm.eval("(field-ref (read-file \"cache-probe.txt\") 'text)")) == "\"two\\n\"",
           "m2 a same-length rewrite is not served from the cache");
+    check(vm.write(vm.eval("(field-ref (read-file \"cache-probe.txt\") 'text)")) == "\"two\\n\"",
+          "m2 and stays fresh once re-admitted");
     // And the contract it must not break: `cached` is volatile, so an ordinary
     // repeat call is byte-identical whether or not it was a hit.
     check(vm.eval("(equal? (read-file \"cache-probe.txt\") (read-file \"cache-probe.txt\"))").truthy(),
