@@ -247,12 +247,31 @@
          (not (string-contains? text "$"))
          (not (string-contains? text "`")))))
 
+;; And a command is evidence only if the candidate could reach what it reads.
+;;
+;; Replay runs the legacy side through a real shell, which has the whole
+;; filesystem, and the candidate inside the capability root, which does not. A
+;; recorded command naming a path outside that root therefore disagrees however
+;; correct the tool is: `cat` prints the file and the tool reports that it cannot
+;; open it. Measured directly -- of five `cat` samples, the three under the root
+;; agreed and the two under /tmp differed, and the run was refused for it.
+;;
+;; This is about the harness being fair, not about safety. A case the candidate
+;; is not permitted to see says nothing about the candidate.
+(define (reachable-command? text)
+  (let ((root capability-root))
+    (not (any? (lambda (word)
+                 (and (string-prefix? "/" word)
+                      (not (string-prefix? root word))))
+               (string-split text " ")))))
+
 (define (samples-for shape samples wanted)
   (let loop ((rest samples) (seen '()) (commands '()) (n 0))
     (cond ((or (null? rest) (= n wanted)) (reverse seen))
           ((and (string=? (car (car rest)) shape)
                 (replayable-command? (cadr (car rest)))
                 (simple-command? (cadr (car rest)))
+                (reachable-command? (cadr (car rest)))
                 (not (member (cadr (car rest)) commands)))
            (loop (cdr rest)
                  (cons (list (list 'command (cadr (car rest)))

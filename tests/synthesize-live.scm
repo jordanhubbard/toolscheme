@@ -103,11 +103,24 @@
                                  (list 'tool name)
                                  (list 'cache-read-tokens (field-ref written 'cache-read-tokens 0))
                                  (list 'verdict verdict)))
+                    ;; A refusal used to report the tool and the disagreement and
+                    ;; nothing else, which points the reader at the tool -- and
+                    ;; the tool is usually not where the fault is. Twice now the
+                    ;; generated tool worked when invoked by hand and the case was
+                    ;; built wrong around it. Both other procedures, and the
+                    ;; arguments the first case was actually called with, are
+                    ;; reported so the next reader does not have to reconstruct
+                    ;; them.
                     (list (list 'stage 'refused)
                           (list 'tool name)
                           (list 'cache-read-tokens (field-ref written 'cache-read-tokens 0))
                           (list 'verdict verdict)
-                          (list 'source (field-ref tool "scheme_source" "")))))))))))
+                          (list 'first-arguments
+                                (if (null? cases) '() (field-ref (car cases) 'arguments '())))
+                          (list 'source (field-ref tool "scheme_source" ""))
+                          (list 'translate-source (field-ref tool "translate_source" ""))
+                          (list 'legacy-form-source
+                                (field-ref tool "legacy_form_source" "")))))))))))
 
 (if (not chosen)
     (list (list 'error "no replayable opportunity in this corpus")
