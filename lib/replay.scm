@@ -51,6 +51,30 @@
                 (list 'follow-up-bytes follow-up)
                 (list 'elapsed-ms (- (field-ref (time) 'epoch-milliseconds) started)))))))
 
+;; What a rewrite actually costs the agent.
+;;
+;; The candidate is timed in process; a redirect spawns a fresh interpreter for
+;; every call. Measured on this machine: sed 1ms, sed through sh -c 2ms, and the
+;; same work through the rewrite 18ms, of which ~16ms is starting the
+;; interpreter. Crediting a candidate with in-process speed it will never have is
+;; how two tools were published as faster than the commands they replace while
+;; being nine times slower in the only way they are ever invoked.
+;;
+;; Measured rather than assumed, because it is a property of the host and not of
+;; this project, and a constant here would be wrong on someone else's machine.
+(define (interpreter-start-ms)
+  (let* ((binary (or (env-value "TOOLSCHEME_BINARY") "toolscheme"))
+         (started (field-ref (time) 'epoch-milliseconds))
+         (job (catch-errors
+                (lambda () (process-start (list (list 'program binary)
+                                                (list 'arguments '("-e" "1"))
+                                                (list 'timeout-ms 10000))))))
+         (done (if (error? job) #f (catch-errors
+                                     (lambda () (process-wait (field-ref job 'job)))))))
+    (if (or (error? job) (not done) (error? done))
+        0
+        (- (field-ref (time) 'epoch-milliseconds) started))))
+
 (define (candidate-run name arguments)
   (let* ((started (field-ref (time) 'epoch-milliseconds))
          (result (catch-errors (lambda () (tool-invoke name arguments)))))
@@ -147,7 +171,14 @@
          (candidate-bytes
            (fold-left (lambda (n r) (+ n (field-ref r 'candidate-bytes 0))) 0 considered))
          (legacy-ms (fold-left (lambda (n r) (+ n (field-ref r 'legacy-ms 0))) 0 considered))
-         (candidate-ms (fold-left (lambda (n r) (+ n (field-ref r 'candidate-ms 0))) 0 considered))
+         ;; Charged one interpreter start per case, because that is what a
+         ;; rewrite pays and what the agent waits for. An MCP caller does not
+         ;; pay it, so `candidate-in-process-ms` is kept alongside: the same
+         ;; tool can be worth substituting through one path and not the other.
+         (start-ms (interpreter-start-ms))
+         (candidate-in-process-ms
+           (fold-left (lambda (n r) (+ n (field-ref r 'candidate-ms 0))) 0 considered))
+         (candidate-ms (+ candidate-in-process-ms (* start-ms (length considered))))
          (all-stable (and (not (null? considered))
                           (= (count-if (lambda (r) (field-ref r 'stable #f)) considered)
                              (length considered))))
@@ -168,10 +199,24 @@
                              (= (count-if (lambda (r) (field-ref r 'legacy-stable #f)) considered)
                                 (length considered))))
          (stability-win (and all-stable (not legacy-stable)))
-         (wins (and all-stable
-                    (or stability-win
-                        (< candidate-bytes legacy-bytes)
-                        (< candidate-ms legacy-ms)))))
+         ;; Two different questions, and conflating them published tools as
+         ;; faster than the commands they replace while being slower in the only
+         ;; way they were ever invoked.
+         ;;
+         ;; An MCP caller holds a running interpreter and pays only the work:
+         ;; `cat` replaced costs 0ms against 61ms, a real win. A redirect spawns
+         ;; a fresh interpreter for every call and pays ~20ms before reading a
+         ;; byte, which no file read can earn back. So a tool can be worth
+         ;; serving and not worth substituting, and most will be.
+         (wins-in-process (and all-stable
+                               (or stability-win
+                                   (< candidate-bytes legacy-bytes)
+                                   (< candidate-in-process-ms legacy-ms))))
+         (wins-as-rewrite (and all-stable
+                               (or stability-win
+                                   (< candidate-bytes legacy-bytes)
+                                   (< candidate-ms legacy-ms))))
+         (wins wins-in-process))
     (list (list 'tool name)
           (list 'cases (length results))
           (list 'considered (length considered))
@@ -180,10 +225,16 @@
           (list 'stable all-stable)
           (list 'legacy-stable legacy-stable)
           (list 'stability-win stability-win)
+          (list 'wins-in-process wins-in-process)
+          ;; Written into the published tool as its claim: only a tool that wins
+          ;; as a rewrite may claim shapes for redirection.
+          (list 'redirect-worthy wins-as-rewrite)
           (list 'legacy-bytes legacy-bytes)
           (list 'candidate-bytes candidate-bytes)
           (list 'legacy-ms legacy-ms)
           (list 'candidate-ms candidate-ms)
+          (list 'candidate-in-process-ms candidate-in-process-ms)
+          (list 'interpreter-start-ms start-ms)
           (list 'publish (and equivalent wins))
           (list 'disagreement disagreement)
           (list 'results results))))
@@ -218,7 +269,10 @@
 ;; inserted rather than asked for, so the model cannot claim evidence for itself.
 (define (with-proven-fields source name verdict)
   (let ((opening (string-index source "(list ")))
-    (if (not opening)
+    ;; A tool that does not win as a rewrite is still published -- it is served
+    ;; over MCP, where it does win -- but it claims no shapes, so redirection
+    ;; will never substitute it.
+    (if (or (not opening) (not (field-ref verdict 'redirect-worthy #f)))
         source
         (string-append
           (substring source 1 (+ opening 5))

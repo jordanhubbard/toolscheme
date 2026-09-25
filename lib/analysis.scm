@@ -201,8 +201,59 @@
   '("grep" "egrep" "fgrep" "rg" "head" "tail" "cat" "wc" "ls" "find" "sort" "uniq"
     "cut" "nl" "basename" "dirname" "file" "stat" "du" "df" "which" "tr" "column"))
 
+;; Some programs are safe only in particular forms, and `sed` is the one that
+;; matters: it rewrites files in place with -i and can write them from a script
+;; with w, so it cannot be allowlisted wholesale. But `sed -n '120,180p' file` is
+;; a bounded read and nothing else, and it is the largest substitutable shape in
+;; the corpus -- 2% of every command either agent runs, twice `cat`.
+;;
+;; Recognised narrowly on purpose: -n, a script of digits, an optional comma and
+;; digits, then p, and one path. Anything else about a sed invocation makes it
+;; unsafe to replay, and a wider rule here would be a rule about running
+;; arbitrary sed scripts on someone's files.
+(define (digits-then-p? script)
+  (let loop ((i 1) (seen-digit #f) (seen-comma #f))
+    (cond ((> i (string-length script)) #f)
+          ((char=? (string-ref script i) #\p) (and seen-digit (= i (string-length script))))
+          ((char=? (string-ref script i) #\,)
+           (and seen-digit (not seen-comma) (loop (+ i 1) #f #t)))
+          ((member (string-ref script i)
+                   '(#\0 #\1 #\2 #\3 #\4 #\5 #\6 #\7 #\8 #\9))
+           (loop (+ i 1) #t seen-comma))
+          (else #f))))
+
+;; The tokenizer keeps the quotes a shell would strip.
+(define (unquoted text)
+  (let ((n (string-length text)))
+    (if (and (> n 1)
+             (or (char=? (string-ref text 1) #\')
+                 (char=? (string-ref text 1) #\"))
+             (char=? (string-ref text n) (string-ref text 1)))
+        (substring text 2 (- n 1))
+        text)))
+
+(define (read-only-sed? text)
+  (let ((parsed (catch-errors (lambda () (shell-parse text)))))
+    (and (not (error? parsed))
+         (= (field-ref parsed 'count 0) 1)
+         (let* ((command (car (field-ref parsed 'commands '())))
+                (flags (field-ref command 'flags '()))
+                (arguments (filter (lambda (a) (not (string-prefix? "-" a)))
+                                   (field-ref command 'arguments '()))))
+           (and (equal? (field-ref command 'name "") "sed")
+                (member "-n" flags)
+                (not (any? (lambda (f) (string-contains? f "i")) flags))
+                (= (length arguments) 2)
+                (digits-then-p? (unquoted (list-ref arguments 1))))))))
+
 (define (replayable-shape? shape)
-  (and (member (shape-program shape) replay-safe-programs) #t))
+  (and (or (member (shape-program shape) replay-safe-programs)
+           ;; The shape a read-only sed produces. Whether a given *line* with
+           ;; this shape is safe is still decided per command by
+           ;; `replayable-command?`; this only allows the shape to be offered at
+           ;; all, which it otherwise never is.
+           (equal? shape "sed -n"))
+       #t))
 
 ;; The shape being safe is not enough, and assuming otherwise is how a gate ends up
 ;; running something it should not: a recorded line matching the shape `head -c`
@@ -211,7 +262,9 @@
 (define (replayable-command? text)
   (let ((programs (programs-in text)))
     (and (not (null? programs))
-         (null? (filter (lambda (p) (not (member p replay-safe-programs))) programs)))))
+         (or (null? (filter (lambda (p) (not (member p replay-safe-programs))) programs))
+             ;; The one conditional case: a sed that only prints lines.
+             (read-only-sed? text)))))
 
 ;; The concrete calls behind a shape, so the gate has something real to replay.
 ;; Shapes are the pattern; these are the evidence.

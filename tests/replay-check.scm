@@ -116,6 +116,20 @@
 
 (define failure-verdict (replay "swallowing-reader" missing-case swallowing-render))
 
+
+;; `sed` cannot be allowlisted wholesale -- -i rewrites files in place -- but the
+;; bounded line read is the largest substitutable shape in the corpus, at twice
+;; the volume of cat. It is recognised narrowly, and the narrowness is the point.
+(define sed-safety
+  (list (list 'range-read (read-only-sed? "sed -n '120,180p' f.c"))
+        (list 'single-line (read-only-sed? "sed -n '42p' f.c"))
+        (list 'unquoted (read-only-sed? "sed -n 1,90p f.c"))
+        (list 'in-place-refused (not (read-only-sed? "sed -i 's/a/b/' f.c")))
+        (list 'substitution-refused (not (read-only-sed? "sed -n 's/a/b/p' f.c")))
+        (list 'write-command-refused (not (read-only-sed? "sed -n '1,5w /tmp/o' f.c")))
+        (list 'offered-to-replay (replayable-command? "sed -n '1,90p' f.c"))
+        (list 'sed-i-still-refused (not (replayable-command? "sed -i 's/a/b/' f.c")))))
+
 (define good (replay "search-read" cases search-read->grep))
 (define bad (replay "search-read-lossy" cases search-read->grep))
 
@@ -134,6 +148,7 @@
 (list (list 'good (report "search-read" good))
       (list 'bad (report "search-read-lossy" bad))
       (list 'safety safety)
+      (list 'sed-safety sed-safety)
       (list 'failure-disagreement-caught (not (field-ref failure-verdict 'publish)))
       (list 'compound-line-not-offered (null? compound-offered))
       (list 'gate-holds (and (field-ref good 'publish)
@@ -143,6 +158,11 @@
                              (field-ref safety 'unsafe-line-refused)
                              (null? compound-offered)
                              ;; A tool that cannot fail correctly is refused.
-                             (not (field-ref failure-verdict 'publish))))
+                             (not (field-ref failure-verdict 'publish))
+                             (field-ref sed-safety 'range-read)
+                             (field-ref sed-safety 'in-place-refused)
+                             (field-ref sed-safety 'substitution-refused)
+                             (field-ref sed-safety 'write-command-refused)
+                             (field-ref sed-safety 'sed-i-still-refused)))
       (list 'rejection-evidence (field-ref bad 'disagreement))
       (list 'good-disagreement (field-ref good 'disagreement)))
