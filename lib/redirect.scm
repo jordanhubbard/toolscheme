@@ -326,7 +326,8 @@
           (else (tool-decision request)))))
 
 (define (tool-decision request)
-  (let* ((bounded (catch-errors (lambda () (bound-read-decision request))))
+  (let* ((refused (catch-errors (lambda () (dogfood-decision request))))
+         (bounded (catch-errors (lambda () (bound-read-decision request))))
          (rewrite (catch-errors
                     (lambda ()
                       (if (equal? (field-ref request "hook_event_name" "") "PreToolUse")
@@ -336,6 +337,9 @@
          (rewriting (and (not (error? rewrite)) rewrite))
          (advising (and (not (error? advice)) (string? advice) advice)))
     (cond
+      ;; A refusal ends it: there is nothing to advise about a call that will
+      ;; not run, and nothing to rewrite.
+      ((and (not (error? refused)) refused) refused)
       ;; A bounded read is a complete decision on its own.
       ((and (not (error? bounded)) bounded) bounded)
       ((and (not rewriting) (not advising)) #f)
