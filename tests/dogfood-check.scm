@@ -33,6 +33,17 @@
     (list 'refuses-python-in-tree (denied? "python3 - <<EOF" inside))
     (list 'refuses-sed (denied? "sed -i s/a/b/ f.scm" inside))
     (list 'refuses-grep (denied? "grep -n x lib/prelude.scm" inside))
+    ;; The shape every real call actually has. Judging only the very first
+    ;; program let all of these through: the commands being aimed at all begin
+    ;; `cd somewhere && ...`, so the program judged was `cd` and the python3
+    ;; behind it was never seen. The rule reported itself working and would have
+    ;; refused nothing anyone types.
+    (list 'sees-past-cd (denied? "cd /home/jkh/Src/toolscheme; python3 - <<EOF" inside))
+    (list 'sees-past-cd-and (denied? "cd /x && sed -i s/a/b/ f" inside))
+    (list 'sees-past-echo (denied? "echo hi; grep -n x f" inside))
+    ;; But judgement stops at the first program that does something, so a build
+    ;; that happens to contain grep further along is untouched.
+    (list 'stops-at-the-first-real-program (not (denied? "make test; grep -n x log" inside)))
     ;; The tools it does not replace are left alone, or the rule becomes hated
     ;; and gets switched off, which helps nobody.
     (list 'allows-make (not (denied? "make test" inside)))
@@ -51,6 +62,12 @@
                  (denied? "python3 - <<EOF" inside)
                  (denied? "sed -i s/a/b/ f.scm" inside)
                  (denied? "grep -n x lib/prelude.scm" inside)
+                 ;; The ones that made the difference between a rule and a
+                 ;; gesture.
+                 (denied? "cd /home/jkh/Src/toolscheme; python3 - <<EOF" inside)
+                 (denied? "cd /x && sed -i s/a/b/ f" inside)
+                 (denied? "echo hi; grep -n x f" inside)
+                 (not (denied? "make test; grep -n x log" inside))
                  (not (denied? "make test" inside))
                  (not (denied? "git commit -m x" inside))
                  (not (denied? "./toolscheme -e 1" inside))

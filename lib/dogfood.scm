@@ -50,18 +50,31 @@
   (let ((row (assoc program dogfood-equivalents)))
     (if row (cdr row) #f)))
 
-;; Only the first program of the line is judged. A pipeline whose head is denied
-;; is denied; one that merely contains `grep` deep inside a build command is not
-;; the case this is aimed at, and refusing it would make the rule hated.
+;; Programs that carry no work of their own. A line beginning with one of these
+;; has not said what it does yet, so judgement passes to what follows.
+;;
+;; This list is why the rule works at all. Judging only the very first program
+;; let every real call through on the first try: the author's commands all begin
+;; `cd /home/jkh/Src/toolscheme && ...`, so the program judged was `cd` and the
+;; python3 behind it was never seen. The rule was switched on, reported itself
+;; working, and would have refused nothing anyone actually types.
+(define dogfood-transparent
+  '("cd" "pushd" "popd" "echo" "printf" "true" "false" "set" "export" "unset"
+    "source" "." "env" "time" "mkdir" "touch"))
+
+;; The first program that claims to do something. A build command that happens
+;; to contain `grep` further along is still left alone -- judgement stops at the
+;; first substantive program, and `make` is substantive -- which is the line
+;; between a forcing function and an obstruction.
 (define (dogfood-offender text)
   (let ((parsed (catch-errors (lambda () (shell-parse text)))))
     (if (error? parsed)
         #f
-        (let ((programs (field-ref parsed 'programs '())))
-          (if (null? programs)
-              #f
-              (let ((first (car programs)))
-                (if (dogfood-equivalent first) first #f)))))))
+        (let loop ((rest (field-ref parsed 'programs '())))
+          (cond ((null? rest) #f)
+                ((member (car rest) dogfood-transparent) (loop (cdr rest)))
+                ((dogfood-equivalent (car rest)) (car rest))
+                (else #f))))))
 
 ;; The roots are a parameter so the rule can be exercised without reaching into
 ;; the environment; `dogfood-decision` is the thin wrapper that reads the
