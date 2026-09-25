@@ -74,6 +74,43 @@
                              (list 'arguments arguments))))))
          samples)))
 
+;; The gate only ever saw commands that worked. Every recorded sample is a file
+;; that existed, so a tool which reports success on a file that does not was
+;; published as equivalent -- and a rewritten `cat missing.txt` then told the
+;; agent the file was empty, with exit 0, instead of that it was absent.
+;;
+;; So each case is also replayed against a path that cannot exist. Both sides
+;; must fail, or the tool cannot stand in for the command when things go wrong,
+;; which is exactly when a silent substitution does the most damage.
+(define absent-suffix ".toolscheme-absent")
+
+(define (failure-variant case)
+  (let ((command (field-ref case 'command "")))
+    (if (string-null? command)
+        '()
+        (list (list (list 'command (string-append command absent-suffix))
+                    (list 'directory (field-ref case 'directory ""))
+                    (list 'arguments '()))))))
+
+(define (with-failure-cases translate cases)
+  (append cases
+          (flatten
+            (map (lambda (case)
+                   (flatten
+                     (map (lambda (variant)
+                            (let ((arguments (catch-errors
+                                               (lambda () (translate (field-ref variant 'command ""))))))
+                              ;; A translate that declines the variant leaves no
+                              ;; case, which is honest: it cannot be asked about a
+                              ;; command it does not accept.
+                              (if (or (error? arguments) (not arguments))
+                                  '()
+                                  (list (list (list 'command (field-ref variant 'command ""))
+                                              (list 'directory (field-ref variant 'directory ""))
+                                              (list 'arguments arguments))))))
+                          (failure-variant case))))
+                 cases))))
+
 (define (attempt opportunity . rest)
   (let ((written (synthesize opportunity (if (null? rest) "" (car rest)))))
     (if (error? written)
@@ -92,7 +129,8 @@
                    (list 'tool name)
                    (list 'outcome (if (error? translate) translate render))))
             (else
-              (let* ((cases (build-cases translate (field-ref opportunity 'samples '())))
+              (let* ((cases (with-failure-cases translate
+                                                (build-cases translate (field-ref opportunity 'samples '()))))
                      (verdict (if (null? cases)
                                   (list (list 'publish #f)
                                         (list 'reason "no case survived translation"))

@@ -80,7 +80,12 @@
                (render (eval (string->symbol (field-ref row 'legacy-form ""))))
                (arguments (translate command))
                (result (tool-invoke name arguments)))
-          (if (error? result) "" (render result))))))
+          ;; An error is returned, not flattened to "". Swallowing it made a
+          ;; failed tool indistinguishable from a command that printed nothing
+          ;; and succeeded -- so a rewritten `cat missing.txt` told the agent the
+          ;; file was empty rather than absent, with exit 0. That is the precise
+          ;; failure a silent substitution must never have.
+          (if (error? result) result (render result))))))
 
 ;; Single-quote for /bin/sh: everything is literal inside single quotes, and the
 ;; only character needing care is the quote itself.

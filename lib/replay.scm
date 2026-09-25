@@ -58,6 +58,12 @@
         result
         (list (list 'output (normalize-output (write-to-string result)))
               (list 'result result)
+              ;; A tool that returns a record saying nothing went wrong has
+              ;; succeeded, whatever is in it. The distinction matters because a
+              ;; tool can report success while having read nothing -- which is
+              ;; how `cat missing.txt` became "the file is empty" with exit 0.
+              (list 'failed (and (list? result)
+                                 (not (absent? (field-ref result "error" #f)))))
               (list 'bytes (string-length (write-to-string result)))
               (list 'elapsed-ms (- (field-ref (time) 'epoch-milliseconds) started))))))
 
@@ -96,10 +102,28 @@
       ((error? candidate) (list (list 'verdict 'failed)
                                 (list 'reason (field-ref candidate 'error))))
       (else
-        (let* ((rendered (normalize-output (render (field-ref candidate 'result))))
+        (let* (;; `render` is model-written and called on every result, including
+               ;; ones describing a failure. A tool that refuses to render a
+               ;; failed read is behaving well -- but it refuses by raising, and
+               ;; an unguarded call took the whole run down with it. Refusing to
+               ;; render is read as the tool reporting failure, which is what it
+               ;; means.
+               (raw (catch-errors (lambda () (render (field-ref candidate 'result)))))
+               (render-refused (error? raw))
+               (rendered (if render-refused "" (normalize-output raw)))
                (expected (field-ref legacy 'output ""))
-               (agrees (string=? rendered expected)))
+               ;; Same bytes is not the same answer. `cat missing.txt` prints
+               ;; nothing and exits 1; a tool that prints nothing and exits 0
+               ;; matches it byte for byte and means something entirely
+               ;; different, and the agent has no way to tell.
+               (legacy-failed (not (= (field-ref legacy 'status 0) 0)))
+               (candidate-failed (or (field-ref candidate 'failed #f) render-refused))
+               (same-status (eq? legacy-failed candidate-failed))
+               (agrees (and (string=? rendered expected) same-status)))
           (list (list 'verdict (if agrees 'agrees 'differs))
+                (list 'same-status same-status)
+                (list 'legacy-failed legacy-failed)
+                (list 'candidate-failed candidate-failed)
                 (list 'command (field-ref case 'command ""))
                 (list 'expected expected)
                 (list 'rendered rendered)

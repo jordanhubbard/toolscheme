@@ -82,6 +82,40 @@
                (opportunities
                  (analyze-events (field-ref (agent-log-events compound-log) 'events))))))
 
+
+;; A tool that cannot fail the way the command fails.
+;;
+;; This is the flaw that got past the gate and into a live rewrite: `cat` on a
+;; missing file exits 1 and prints nothing; the published tool returned a record
+;; with empty text and exited 0. Byte-for-byte identical output, opposite
+;; meanings, and the agent had no way to tell it had been told a file was empty
+;; rather than absent. Equivalence now includes agreeing about failure.
+(define (swallows-errors arguments)
+  (let ((r (catch-errors (lambda () (read-file (field-ref arguments "path" ""))))))
+    ;; The mistake in miniature: a default standing in for an error.
+    (list (list "text" (if (error? r) "" (field-ref r 'text ""))))))
+
+(define-tool
+  (list (list 'name "swallowing-reader")
+        (list 'description "reports success whatever happened")
+        (list 'shapes '("cat"))
+        (list 'proven '(((shape "cat") (cases 1) (agreed 1) (worthwhile 1))))
+        (list 'translate "swallowing-translate")
+        (list 'legacy-form "swallowing-render")
+        (list 'procedure swallows-errors)))
+
+(define (swallowing-translate command)
+  (list (list "path" (car (cdr (string-split command " "))))))
+(define (swallowing-render result) (field-ref result "text" ""))
+
+;; Replayed against a file that does not exist: cat fails, the tool does not.
+(define missing-case
+  (list (list (list 'command "cat definitely-absent-file.txt")
+              (list 'directory "")
+              (list 'arguments (list (list "path" "definitely-absent-file.txt"))))))
+
+(define failure-verdict (replay "swallowing-reader" missing-case swallowing-render))
+
 (define good (replay "search-read" cases search-read->grep))
 (define bad (replay "search-read-lossy" cases search-read->grep))
 
@@ -100,12 +134,15 @@
 (list (list 'good (report "search-read" good))
       (list 'bad (report "search-read-lossy" bad))
       (list 'safety safety)
+      (list 'failure-disagreement-caught (not (field-ref failure-verdict 'publish)))
       (list 'compound-line-not-offered (null? compound-offered))
       (list 'gate-holds (and (field-ref good 'publish)
                              (not (field-ref bad 'publish))
                              (field-ref safety 'safe-shape-offered)
                              (field-ref safety 'destructive-refused)
                              (field-ref safety 'unsafe-line-refused)
-                             (null? compound-offered)))
+                             (null? compound-offered)
+                             ;; A tool that cannot fail correctly is refused.
+                             (not (field-ref failure-verdict 'publish))))
       (list 'rejection-evidence (field-ref bad 'disagreement))
       (list 'good-disagreement (field-ref good 'disagreement)))

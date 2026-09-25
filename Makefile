@@ -124,7 +124,8 @@ loop: toolscheme
 	  --allow-program sh --allow-program grep --allow-program head,(checks-hold #t))
 	@$(call check-scheme,tests/synthesis-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/replay-check.scm --lib lib --allow-process \
-	  --allow-program grep --allow-program head --allow-program sh --allow-program bash,(gate-holds #t))
+	  --allow-program grep --allow-program head --allow-program sh --allow-program bash \
+	  --allow-program cat,(gate-holds #t))
 
 # The full gate: warning-clean optimized build, sanitizers, fuzzing, benchmarks,
 # and the loop.
