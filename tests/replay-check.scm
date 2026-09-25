@@ -46,7 +46,11 @@
 (define safety
   (let* ((log (string-append
                 "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
-                "{\"command\":\"grep -n x f.c | head -20\"}}\n"
+                ;; A plain command, because a pipeline is no longer offered as
+                ;; evidence: a single-purpose tool cannot reproduce what a shell
+                ;; program prints, and offering one only wastes a synthesis round
+                ;; on a candidate the gate is certain to refuse.
+                "{\"command\":\"grep -n x f.c\"}}\n"
                 "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
                 "{\"command\":\"rm -rf /tmp/scratch\"}}\n"
                 "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
@@ -59,7 +63,24 @@
           (list 'destructive-refused (not (member "rm -rf" patterns)))
           ;; `head -c` is a safe program, but the line it appeared in ran a deploy
           ;; script. The shape must not launder the command around it.
-          (list 'unsafe-line-refused (not (member "head -c" patterns))))))
+          (list 'unsafe-line-refused (not (member "head -c" patterns)))
+          )))
+
+
+;; A compound line is not evidence even when every program in it is safe. This is
+;; what four consecutive synthesis runs died on: `f=path; grep ... $f` was offered
+;; as a sample of the "grep" shape, and no single-purpose tool can stand in for a
+;; shell program, so the gate refused every case.
+(define compound-log
+  (string-append
+    "{\"type\":\"tool_use\",\"tool_name\":\"bash\",\"tool_input\":"
+    "{\"command\":\"f=/tmp/o; cat $f\"}}\n"))
+
+(define compound-offered
+  (map (lambda (o) (field-ref o 'pattern))
+       (filter (lambda (o) (field-ref o 'replayable #f))
+               (opportunities
+                 (analyze-events (field-ref (agent-log-events compound-log) 'events))))))
 
 (define good (replay "search-read" cases search-read->grep))
 (define bad (replay "search-read-lossy" cases search-read->grep))
@@ -79,10 +100,12 @@
 (list (list 'good (report "search-read" good))
       (list 'bad (report "search-read-lossy" bad))
       (list 'safety safety)
+      (list 'compound-line-not-offered (null? compound-offered))
       (list 'gate-holds (and (field-ref good 'publish)
                              (not (field-ref bad 'publish))
                              (field-ref safety 'safe-shape-offered)
                              (field-ref safety 'destructive-refused)
-                             (field-ref safety 'unsafe-line-refused)))
+                             (field-ref safety 'unsafe-line-refused)
+                             (null? compound-offered)))
       (list 'rejection-evidence (field-ref bad 'disagreement))
       (list 'good-disagreement (field-ref good 'disagreement)))

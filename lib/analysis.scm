@@ -223,11 +223,36 @@
              (map (lambda (shape) (list shape text directory)) (command-shapes text))))
          calls)))
 
+;; A sample is evidence only if the recorded command is one plain command.
+;;
+;; `replayable-command?` asks whether a line is safe to re-run; it says nothing
+;; about whether a tool could stand in for it. A line like
+;;
+;;     f=/tmp/out; grep -E "ERROR|Import" $f
+;;
+;; is a shell program: an assignment, a separator, and a grep against a variable.
+;; Every program in it is safe, so it passed, and it was then offered as a sample
+;; of the "grep" shape. No single-purpose tool can reproduce a shell program's
+;; output, so the gate refused -- five cases considered, none agreed, every time.
+;; Four consecutive runs died this way, on two models as far apart as Haiku and
+;; gpt-6-astra, which is what finally made it obvious the fault was here and not
+;; in what was writing the tools.
+;;
+;; A variable or a substitution is excluded for the same reason: the recorded
+;; text is not what ran, and only the shell knows what did.
+(define (simple-command? text)
+  (let ((parsed (catch-errors (lambda () (shell-parse text)))))
+    (and (not (error? parsed))
+         (= (field-ref parsed 'count 0) 1)
+         (not (string-contains? text "$"))
+         (not (string-contains? text "`")))))
+
 (define (samples-for shape samples wanted)
   (let loop ((rest samples) (seen '()) (commands '()) (n 0))
     (cond ((or (null? rest) (= n wanted)) (reverse seen))
           ((and (string=? (car (car rest)) shape)
                 (replayable-command? (cadr (car rest)))
+                (simple-command? (cadr (car rest)))
                 (not (member (cadr (car rest)) commands)))
            (loop (cdr rest)
                  (cons (list (list 'command (cadr (car rest)))
