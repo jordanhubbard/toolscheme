@@ -1308,8 +1308,13 @@ static void milestone_1_shell_parse(Interpreter& vm) {
     // detection was once suppressed while the current token carried a quote, and
     // since the flag outlived the quoted region, everything after the quote was
     // swallowed: `echo "hi"; ls` parsed as one command and `ls` was never seen.
-    // 1,554 of 16,828 recorded commands -- 9.2% -- tripped this, under every
-    // analysis, the redirect gate and the refusal rule alike.
+    // 313 of 11,921 recorded commands -- 2.6% -- parsed differently once it was
+    // fixed, under every analysis, the redirect gate and the refusal rule alike.
+    // The first figure published for this was 9.2%, from a string search for a
+    // quote followed by an operator; that also matches quotes inside heredoc
+    // bodies and operators inside string literals, so it was an upper bound
+    // reported as a measurement. experiments/corpus/parse-delta.scm dumps one
+    // line per command under each binary, which is the measurement.
     equal(vm, "(field-ref (shell-parse \"echo \\\"hi\\\"; ls\") 'programs)",
           "(\"echo\" \"ls\")", "m1 a quoted word does not swallow the next command");
     equal(vm, "(field-ref (shell-parse \"grep \\\"foo\\\"|head -5\") 'programs)",
