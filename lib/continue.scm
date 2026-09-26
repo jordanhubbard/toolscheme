@@ -98,6 +98,25 @@
       (else
         (begin
           (remember-key session (continue-marker session) "stop")
+          ;; Recorded in the log as well as the ledger, because the ledger says
+          ;; only that a session continued at some point and the question worth
+          ;; answering is what each continuation produced. Without a timestamped
+          ;; record there is no way to tell a stop the hook continued from one
+          ;; the human answered, and the first attempt to measure this could not
+          ;; separate them.
+          (catch-errors
+            (lambda ()
+              (hook-append
+                (list (list "source" "toolscheme-hook")
+                      (list "event" "continued")
+                      (list "session" session)
+                      (list "tool" "")
+                      (list "command" "")
+                      (list "continuation" (+ used 1))
+                      (list "of" (continue-cap))
+                      (list "message" (clip message hook-command-limit))
+                      (list "at" (field-ref (time) 'epoch-milliseconds))
+                      (list "bytes" 0)))))
           (list (list "hookSpecificOutput"
                       (list (list "hookEventName" "Stop")
                             (list "continueConversation" #t)
