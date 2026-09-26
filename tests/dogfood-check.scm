@@ -72,4 +72,17 @@
                  (not (denied? "git commit -m x" inside))
                  (not (denied? "./toolscheme -e 1" inside))
                  (string-contains? (reason "grep -n x f" inside) "(grep \"pattern\"")
-                 (string-contains? (reason "python3 -c 1" inside) "add the capability"))))
+                 (string-contains? (reason "python3 -c 1" inside) "add the capability")
+                 ;; `cat > f <<EOF` is how a file gets created, not how one gets
+                 ;; read, and the rule used to answer it with `(read-file
+                 ;; "path")` -- advice so plainly wrong for a write that it
+                 ;; diagnosed the misclassification rather than the offence.
+                 ;; Still refused, since a shell is still not the way to write a
+                 ;; file here; the equivalent named is now a write.
+                 (denied? "cat > f.sh <<EOF" inside)
+                 (string-contains? (reason "cat > f.sh <<EOF" inside) "(write-file")
+                 (string-contains? (reason "cat >> f.sh <<EOF" inside) "(write-file")
+                 ;; A genuine read whose output happens to be redirected is
+                 ;; still a read, and must keep pointing at read-file.
+                 (string-contains? (reason "cat f.sh > out.txt" inside) "(read-file")
+                 (string-contains? (reason "cat f.sh" inside) "(read-file"))))

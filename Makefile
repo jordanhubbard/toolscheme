@@ -37,7 +37,7 @@ ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
                 -Wl,-rpath,'$(DUCKDB_RUNTIME)'
 endif
 
-.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall vendor-duckdb FORCE clean learning-test install-test package
+.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall install-codex-shim uninstall-codex-shim vendor-duckdb FORCE clean learning-test install-test package
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
@@ -119,6 +119,7 @@ loop: toolscheme
 	@$(call check-scheme,tests/sql-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/continue-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/codex-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/codex-wiring-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/classify-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/dogfood-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/sleep-check.scm --lib lib,(checks-hold #t))
@@ -221,10 +222,50 @@ install: toolscheme
 	     --claude-dir "$(CLAUDE_CONFIG_DIR)" --codex-dir "$(CODEX_HOME)"; fi
 	@echo "Then: toolscheme analyze $(STATEDIR)"
 
-uninstall:
+uninstall: uninstall-codex-shim
 	rm -f "$(BINDIR)/toolscheme"
 	rm -rf "$(SHAREDIR)"
 	@echo "removed the binary and $(SHAREDIR); observations in $(STATEDIR) are left alone"
+
+# Deliberately not part of `install`. Everything else here observes; this one
+# puts a file named `codex` ahead of the real one on someone's PATH, and that is
+# a decision to make on purpose rather than to inherit from a make target. It is
+# a symlink so that a later `make install` updates it, and the shim recognises
+# other copies of itself by content, so linking it as `codex` cannot loop.
+install-codex-shim: install
+	ln -sf "$(SHAREDIR)/hooks/codex-shim.sh" "$(BINDIR)/codex"
+	@# The shim only makes a session reachable; the timer is what reaches it.
+	@# Installing it is safe whatever the setting says -- the watcher exits
+	@# immediately unless TOOLSCHEME_CODEX_CONTINUE is on -- so the setting stays
+	@# the single switch rather than one of two that have to agree.
+	@if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then \
+	   install -d "$(HOME)/.config/systemd/user"; \
+	   install -m 644 systemd/toolscheme-codex-continue.service systemd/toolscheme-codex-continue.timer \
+	     "$(HOME)/.config/systemd/user/"; \
+	   systemctl --user daemon-reload; \
+	   systemctl --user enable --now toolscheme-codex-continue.timer >/dev/null 2>&1 \
+	     && echo "watcher scheduled: toolscheme-codex-continue.timer, every minute" \
+	     || echo "warning: could not enable toolscheme-codex-continue.timer"; \
+	 else \
+	   echo "no systemd user session -- run $(SHAREDIR)/hooks/codex-continue.sh from cron or launchd"; \
+	 fi
+	@echo
+	@echo "installed: $(BINDIR)/codex -> $(SHAREDIR)/hooks/codex-shim.sh"
+	@if [ "$$(command -v codex)" = "$(BINDIR)/codex" ]; then \
+	   echo "codex on your PATH is now the shim"; \
+	 else \
+	   echo "warning: $(BINDIR) is not early enough on PATH -- codex still resolves to $$(command -v codex)"; \
+	 fi
+	@echo "it passes through unchanged unless TOOLSCHEME_CODEX_CONTINUE=1 is set"
+
+uninstall-codex-shim:
+	@if [ -L "$(BINDIR)/codex" ]; then rm -f "$(BINDIR)/codex"; \
+	   echo "removed $(BINDIR)/codex"; fi
+	@if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then \
+	   systemctl --user disable --now toolscheme-codex-continue.timer >/dev/null 2>&1 || true; \
+	   rm -f "$(HOME)/.config/systemd/user/toolscheme-codex-continue.service" \
+	         "$(HOME)/.config/systemd/user/toolscheme-codex-continue.timer"; \
+	   systemctl --user daemon-reload || true; fi
 
 # Did the instruction land? Claude Code does not record its loaded instructions in
 # the transcript, so this is judged by behaviour instead: a session that waits

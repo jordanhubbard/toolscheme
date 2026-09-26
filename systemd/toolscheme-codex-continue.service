@@ -1,0 +1,15 @@
+[Unit]
+Description=Continue Codex sessions that stopped after naming their own next step
+
+[Service]
+Type=oneshot
+# Paths are resolved against the install prefix, not a source tree: %h is the
+# user's home, and the hook is the copy `make install` placed under share/.
+# A checkout can be moved or deleted; an installed tree is the thing that is
+# still there at 3am when the timer fires.
+ExecStart=%h/.local/share/toolscheme/hooks/codex-continue.sh
+# The watcher queues through `codex`, which is the shim when one is installed --
+# and a systemd unit inherits no login shell, so ~/.local/bin must be named.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Does nothing unless TOOLSCHEME_CODEX_CONTINUE is on, and exits 0 regardless:
+# a watcher that fails loudly on a timer is worse than one that waits.

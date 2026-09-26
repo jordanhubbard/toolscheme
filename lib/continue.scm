@@ -40,9 +40,13 @@
           (if (number? n) n continue-default-cap))
         continue-default-cap)))
 
+;; `substring` here is 1-based and end-inclusive, matching `first-line` and
+;; `last-line` rather than R7RS. Written as if it were R7RS this returned one
+;; character more than asked for -- harmless in a 400-character tail, and the
+;; kind of thing that is not harmless somewhere else.
 (define (message-tail text limit)
   (if (> (string-length text) limit)
-      (substring text (- (string-length text) limit) (string-length text))
+      (substring text (+ (- (string-length text) limit) 1) (string-length text))
       text))
 
 ;; A question is the one case that genuinely wants a person. Answering it on the

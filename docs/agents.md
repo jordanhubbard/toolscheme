@@ -337,15 +337,23 @@ TOOLSCHEME_CONTINUE=1        # decline the stop when the agent named its next st
 TOOLSCHEME_CONTINUE_MAX=3    # consecutive continuations before it stops anyway
 ```
 
-Claude Code only; Codex has no `Stop` hook to decline.
+That is the Claude Code path, which declines a `Stop` hook. Codex has no such
+hook; see [Continuing Codex](#continuing-codex) below for how it is reached
+instead.
 
 Measured across 30 Codex sessions: 34.5 hours idle waiting for a person, 10.1 of
 them in gaps short enough to be worth recovering, against 2.7 hours asleep on a
-timer. But the obvious use of that is not what the data supports. Of 141 such
-stalls, **2** ended with a question or an offer to proceed; the other 139 ended
-with a completion summary that named the next step and stopped anyway. So this does
+timer. Idle is twelve times the problem `wait-for` was built for. So this does
 not approve decisions on anyone's behalf. It declines to stop when the agent has
 already said what it would do next.
+
+An earlier version of this section claimed 2 of 141 stalls ended in a question.
+That number was produced by running the phrase-list detector over the corpus, so
+it measured the detector rather than the corpus. Labelled independently over 162
+stalls, **28** ask something, and the phrase lists find one of them: precision
+0.15, recall 0.11. A classifier over the same corpus scores 0.83 and catches 24.
+Set `TOOLSCHEME_CLASSIFY=1` to use it; the phrase lists remain the fallback
+because they need no network on a path that runs inside a hook.
 
 It refuses in every other case:
 
@@ -365,6 +373,52 @@ signal.
 This is the most dangerous feature here, because an agent that does not stop has no
 natural place left to check its own work. The cap exists so a loop ends by
 arithmetic rather than by someone noticing.
+
+## Continuing Codex
+
+Codex has no turn-end hook, so there is no stop to decline. What it has instead
+is an app server: a session launched against one can be handed a message by
+`codex queue` while it sits idle. That only reaches sessions started with
+`--remote`, and nobody types a different command to start their editor. So the
+mechanism is a shim -- a `codex` installed earlier on PATH than the real one,
+which adds `--remote` and gets out of the way.
+
+```
+make install-codex-shim     # symlinks ~/.local/bin/codex, schedules the watcher
+make uninstall-codex-shim   # removes both
+```
+
+Then, in `~/.config/toolscheme/config`:
+
+```
+TOOLSCHEME_CODEX_CONTINUE=1
+```
+
+Without that line the shim is a pass-through and the watcher exits immediately,
+so the setting is the single switch rather than one of several that must agree.
+
+A wrapper around someone's main tool is only acceptable if it cannot make things
+worse, so three rules govern it:
+
+- **It never fails closed.** If the app server will not start -- or anything else
+  goes wrong -- it execs the real codex unchanged.
+- **It only adds `--remote` where a session can be continued at all.** `exec`,
+  `mcp`, `login` and the rest pass through untouched; a short non-interactive run
+  has no stall to recover.
+- **It never execs another copy of itself.** Copies recognise each other by an
+  embedded marker rather than by path, because running a checkout's copy while an
+  installed one sits on PATH would otherwise have each exec the other forever.
+
+Delivery is a poll rather than an event: `hooks/codex-continue.sh` reads the
+rollout transcripts Codex already writes and queues into threads that stalled
+after naming their own next step. On Linux `make install-codex-shim` schedules it
+as a systemd user timer, once a minute. Elsewhere, run it from cron or launchd --
+the target says so rather than pretending it scheduled anything.
+
+Two things to know before turning it on. It affects **sessions started after**
+the setting, so anything already running is not reachable. And every session
+shares one app-server process, which is a failure mode a plain `codex` does not
+have: if that process dies, the sessions attached to it go with it.
 
 ## Keeping the installation current
 

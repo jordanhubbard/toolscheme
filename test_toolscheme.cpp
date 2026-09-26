@@ -1304,6 +1304,19 @@ static void milestone_1_shell_parse(Interpreter& vm) {
     equal(vm, "(field-ref (shell-parse \"a && b || c; d\") 'count)", "4",
           "m1 every connector separates commands");
 
+    // ...but a quoted word must not hide the operator that follows it. Operator
+    // detection was once suppressed while the current token carried a quote, and
+    // since the flag outlived the quoted region, everything after the quote was
+    // swallowed: `echo "hi"; ls` parsed as one command and `ls` was never seen.
+    // 1,554 of 16,828 recorded commands -- 9.2% -- tripped this, under every
+    // analysis, the redirect gate and the refusal rule alike.
+    equal(vm, "(field-ref (shell-parse \"echo \\\"hi\\\"; ls\") 'programs)",
+          "(\"echo\" \"ls\")", "m1 a quoted word does not swallow the next command");
+    equal(vm, "(field-ref (shell-parse \"grep \\\"foo\\\"|head -5\") 'programs)",
+          "(\"grep\" \"head\")", "m1 a quoted word does not swallow a pipe");
+    equal(vm, "(field-ref (shell-parse \"echo \\\"hi\\\">out.txt\") 'programs)",
+          "(\"echo\")", "m1 a quoted word does not swallow a redirect");
+
     // A tool is identified by its basename, and flags are reported separately.
     equal(vm, "(field-ref (car (field-ref (shell-parse \"/usr/bin/grep -n x\") 'commands)) 'name)",
           "\"grep\"", "m1 a path-qualified program keeps its tool identity");

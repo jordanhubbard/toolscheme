@@ -1,0 +1,15 @@
+[Unit]
+Description=Poll Codex sessions for stalls toolscheme can continue
+
+[Timer]
+# A minute is the interval that matters: the thing being recovered is a session
+# sitting idle waiting for a human, and the measured gaps worth recovering were
+# minutes long. Polling faster buys nothing, because the stall does not end any
+# sooner; polling slower spends the very idle time the feature exists to reclaim.
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

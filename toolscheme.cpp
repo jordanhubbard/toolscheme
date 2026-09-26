@@ -6163,7 +6163,16 @@ std::vector<ShellCommand> shell_split(const std::string& source,
         }
 
         std::string found;
-        if (!token_quoted && shell_operator_at(source, i, found)) {
+        // Not guarded by `token_quoted`. It once was, and that swallowed the rest
+        // of the line after any quoted word followed directly by an operator --
+        // `echo "hi"; ls` parsed as a single command called `echo`, because the
+        // flag records that the token *contained* quotes and stays set until the
+        // token is flushed, long after the quoted region ended. Every character
+        // that reaches here is already outside quotes: the quote, substitution
+        // and backtick branches above consume their contents whole. So there was
+        // nothing for the guard to protect, and `cmd "arg"; other` -- an ordinary
+        // way to write two commands -- lost the second one.
+        if (shell_operator_at(source, i, found)) {
             // `<<` introduces a heredoc; the delimiter is the next token.
             if (found == "<" && source.compare(i, 2, "<<") == 0) {
                 std::size_t end = i + 2;

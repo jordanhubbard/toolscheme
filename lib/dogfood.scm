@@ -62,19 +62,41 @@
   '("cd" "pushd" "popd" "echo" "printf" "true" "false" "set" "export" "unset"
     "source" "." "env" "time" "mkdir" "touch"))
 
-;; The first program that claims to do something. A build command that happens
+;; `cat > file <<'EOF'` is not a read at all: it is the ordinary way to create a
+;; file from literal text. The rule refused it and answered with `(read-file
+;; "path")` -- advice so plainly wrong for a write that it proved the
+;; misclassification rather than the offence. Judging the program name alone
+;; cannot tell the two apart; the redirections can, and `shell-parse` has
+;; reported them all along.
+(define (dogfood-writes-a-file? command)
+  (let ((operators (map (lambda (r) (field-ref r 'operator ""))
+                        (field-ref command 'redirections '()))))
+    (and (memq 'heredoc operators)
+         (or (memq '> operators) (memq '>> operators))
+         #t)))
+
+(define dogfood-write-advice
+  "(write-file \"path\" \"text\") -- or your agent's own file-writing tool, which
+  needs no shell quoting for anything long")
+
+;; The first command that claims to do something. A build command that happens
 ;; to contain `grep` further along is still left alone -- judgement stops at the
 ;; first substantive program, and `make` is substantive -- which is the line
 ;; between a forcing function and an obstruction.
-(define (dogfood-offender text)
+(define (dogfood-offending-command text)
   (let ((parsed (catch-errors (lambda () (shell-parse text)))))
     (if (error? parsed)
         #f
-        (let loop ((rest (field-ref parsed 'programs '())))
+        (let loop ((rest (field-ref parsed 'commands '())))
           (cond ((null? rest) #f)
-                ((member (car rest) dogfood-transparent) (loop (cdr rest)))
-                ((dogfood-equivalent (car rest)) (car rest))
+                ((member (field-ref (car rest) 'program "") dogfood-transparent)
+                 (loop (cdr rest)))
+                ((dogfood-equivalent (field-ref (car rest) 'program "")) (car rest))
                 (else #f))))))
+
+(define (dogfood-offender text)
+  (let ((command (dogfood-offending-command text)))
+    (if command (field-ref command 'program "") #f)))
 
 ;; The roots are a parameter so the rule can be exercised without reaching into
 ;; the environment; `dogfood-decision` is the thin wrapper that reads the
@@ -89,7 +111,8 @@
             (string-null? text)
             (not (within-dogfood? cwd roots)))
         #f
-        (let ((offender (dogfood-offender text)))
+        (let* ((command (dogfood-offending-command text))
+               (offender (if command (field-ref command 'program "") #f)))
           (if (not offender)
               #f
               (list (list "hookSpecificOutput"
@@ -99,7 +122,9 @@
                                       (string-append
                                         "This tree is toolscheme's own, and `" offender
                                         "` is one of the tools it exists to replace. Use:\n  "
-                                        (dogfood-equivalent offender)
+                                        (if (dogfood-writes-a-file? command)
+                                            dogfood-write-advice
+                                            (dogfood-equivalent offender))
                                         "\n\n(apropos \"name\") lists every top-level binding "
                                         "matching a substring, library included -- check there "
                                         "before concluding something is missing. The first "

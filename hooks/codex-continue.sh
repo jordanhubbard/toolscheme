@@ -42,7 +42,9 @@ if [ -n "$CONFIG" ] && [ -r "$CONFIG" ]; then
   set +a
 fi
 
-TOOLSCHEME_CODEX_SOCKET="${TOOLSCHEME_CODEX_SOCKET:-$STATE/codex.sock}"
+# Must match codex-shim.sh, which owns this path and keeps the directory at 0700
+# because Codex 0.156 refuses to bind a socket any other user could replace.
+TOOLSCHEME_CODEX_SOCKET="${TOOLSCHEME_CODEX_SOCKET:-$STATE/run/codex.sock}"
 export TOOLSCHEME_CODEX_SOCKET
 
 # Rooted at the transcripts, which is the only thing it reads; `codex` is the
