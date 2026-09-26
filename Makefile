@@ -121,6 +121,7 @@ loop: toolscheme
 	@$(call check-scheme,tests/codex-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/classify-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/dogfood-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/sleep-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/pipeline-check.scm --lib lib --allow-process \
 	  --allow-program sh --allow-program sed --allow-program rg --allow-program cat \
 	  --allow-program tail --allow-program head --allow-program nl,(checks-hold #t))

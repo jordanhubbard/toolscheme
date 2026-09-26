@@ -111,3 +111,79 @@
                                         "TOOLSCHEME_DOGFOOD to lift this."))))))))))
 
 (define (dogfood-decision request) (dogfood-refusal request (dogfood-roots)))
+
+
+;;; ---------------------------------------------------------------------------
+;;; Refusing a fixed wait.
+;;;
+;;; The largest measured waste in this corpus by three orders of magnitude.
+;;; 1,168 fixed-timer sleeps across two sessions, 11.9 hours, a median of 40
+;;; seconds each -- against 22 seconds for the entire tool-substitution loop
+;;; those sessions were being built to serve.
+;;;
+;;; Two milder mechanisms were tried on it and both failed, which is why this is
+;;; a refusal. The `wait-for` instruction was already in AGENTS.md and CLAUDE.md
+;;; before the corpus window, and the sleeping continued at 370, 190, 155, 87 and
+;;; 125 a day after it. The hook advice fired correctly and was ignored; advice
+;;; is added to the context and read past. A denial cannot be read past.
+;;;
+;;; What it must not do is demand `wait-for` unconditionally. Of the waits
+;;; measured, 402 were followed immediately by a local observable check -- tail,
+;;; cat, ls -- which is exactly what wait-for replaces, but 407 were followed by
+;;; ssh, gh or curl, waiting on something with no local condition to watch. A
+;;; rule that refuses those has no correct answer to offer, and a rule with no
+;;; correct answer gets switched off within a day. So short polling stays
+;;; available: it is worse than an event, and much better than a blind minute.
+
+(define refuse-sleep-default-ms 10000)
+
+(define (refuse-sleep-enabled?) (setting-on? "TOOLSCHEME_REFUSE_SLEEP"))
+
+(define (refuse-sleep-threshold-ms)
+  (let ((configured (setting "TOOLSCHEME_REFUSE_SLEEP_MS")))
+    (if (string? configured)
+        (let ((n (string->number configured)))
+          (if (number? n) n refuse-sleep-default-ms))
+        refuse-sleep-default-ms)))
+
+;; Takes the threshold rather than reading it, so the rule can be exercised
+;; directly -- the same reason `dogfood-refusal` takes its roots.
+(define (sleep-refusal request threshold)
+  (let ((event (field-ref request "hook_event_name" "")))
+    (if (not (equal? event "PreToolUse"))
+        #f
+        ;; `sleeping-for` already knows both spellings -- Codex's duration_ms
+        ;; tool and a shell `sleep N` -- and already declines to count a sleep
+        ;; the agent backgrounded, which is the work being simulated rather than
+        ;; the agent waiting for it.
+        (let ((slept (catch-errors (lambda () (sleeping-for request)))))
+          (if (or (error? slept) (not (number? slept)) (< slept threshold))
+              #f
+              (list (list "hookSpecificOutput"
+                          (list (list "hookEventName" "PreToolUse")
+                                (list "permissionDecision" "deny")
+                                (list "permissionDecisionReason"
+                                      (string-append
+                                        "This waits a fixed "
+                                        (number->string (quotient slept 1000))
+                                        "s whether or not the thing you are waiting for has "
+                                        "happened. Fixed waits cost 11.9 hours across the "
+                                        "sessions on this machine.\n\n"
+                                        "If the thing you are waiting for is observable here:\n"
+                                        "  toolscheme -e '(wait-for (quote (exists \"some/path\")))'\n"
+                                        "  toolscheme -e '(wait-for (quote (matches \"some.log\" \"ready\")))'\n"
+                                        "Both take (timeout-ms N) and return the moment the "
+                                        "condition holds.\n\n"
+                                        "If you are waiting on something remote with nothing "
+                                        "local to watch -- a CI run, a queue -- then poll in "
+                                        "short increments instead: sleep "
+                                        (number->string (quotient threshold 2000))
+                                        " and check, rather than sleeping "
+                                        (number->string (quotient slept 1000))
+                                        " and hoping. Unset TOOLSCHEME_REFUSE_SLEEP to lift "
+                                        "this."))))))))))
+
+(define (sleep-decision request)
+  (if (refuse-sleep-enabled?)
+      (sleep-refusal request (refuse-sleep-threshold-ms))
+      #f))

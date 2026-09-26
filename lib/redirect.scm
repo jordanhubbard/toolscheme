@@ -326,7 +326,8 @@
           (else (tool-decision request)))))
 
 (define (tool-decision request)
-  (let* ((refused (catch-errors (lambda () (dogfood-decision request))))
+  (let* ((waited (catch-errors (lambda () (sleep-decision request))))
+         (refused (catch-errors (lambda () (dogfood-decision request))))
          (bounded (catch-errors (lambda () (bound-read-decision request))))
          (rewrite (catch-errors
                     (lambda ()
@@ -338,7 +339,9 @@
          (advising (and (not (error? advice)) (string? advice) advice)))
     (cond
       ;; A refusal ends it: there is nothing to advise about a call that will
-      ;; not run, and nothing to rewrite.
+      ;; not run, and nothing to rewrite. The wait is checked first because it
+      ;; is the larger waste and the more specific complaint.
+      ((and (not (error? waited)) waited) waited)
       ((and (not (error? refused)) refused) refused)
       ;; A bounded read is a complete decision on its own.
       ((and (not (error? bounded)) bounded) bounded)
