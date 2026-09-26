@@ -196,6 +196,56 @@
                     (list "status" (field-ref finished 'status -1))
                     (list "output" (string-trim (field-ref finished 'stdout "")))))))))
 
+;; The same record the Claude Code path writes in [[continue]], so that one
+;; question -- what did each continuation produce -- can be asked of both without
+;; caring which agent it was. Without it a Codex continuation existed only in the
+;; systemd journal, and experiments/continuation/did-it-work.scm, which reads the
+;; observation log, could not see a single one: the feature ran and was
+;; unmeasurable.
+;;
+;; The session field is the rollout thread id, which is exactly what the hook
+;; already records as the session for a Codex tool call -- checked against a live
+;; thread rather than assumed -- so a continuation joins to the work after it.
+;;
+;; This runs in a *second* pass, rooted at the state directory, because there is
+;; one filesystem root per run and the scan needs it pointed at the rollouts.
+;; Called from the scan instead, `hook-append` reported `(appended #t)` while
+;; writing into ~/.codex/sessions/observations.jsonl -- the log path is relative,
+;; so it silently followed whatever root it was given. Widening the scan's root
+;; to $HOME would have fixed it by handing a timer-driven job with process
+;; privileges the run of the home directory, which is the wrong trade.
+;;
+;; Wrapped, because a watcher on a timer must not fail over its own bookkeeping.
+(define (codex-record! thread continuation cap message)
+  (catch-errors
+    (lambda ()
+      (hook-append
+        (list (list "source" "toolscheme-hook")
+              (list "event" "continued")
+              (list "agent" "codex")
+              (list "session" thread)
+              (list "tool" "")
+              (list "command" "")
+              (list "continuation" continuation)
+              (list "of" cap)
+              (list "message" (clip message hook-command-limit))
+              (list "at" (field-ref (time) 'epoch-milliseconds))
+              (list "bytes" 0))))))
+
+;; Records every thread the scan actually queued into. Takes the scan's own
+;; report, so the two stages cannot disagree about what happened.
+(define (codex-record-all! threads)
+  (fold-left
+    (lambda (n thread)
+      (if (equal? (field-ref thread "queued" "") "sent")
+          (begin (codex-record! (field-ref thread "thread" "")
+                                (field-ref thread "continuation" 0)
+                                (field-ref thread "of" 0)
+                                (field-ref thread "message" ""))
+                 (+ n 1))
+          n))
+    0 threads))
+
 ;; One pass over every thread on the machine. Returns what it looked at and what
 ;; it did, so a dry run reads the same as a live one minus the queueing.
 (define (codex-scan act?)
@@ -219,6 +269,9 @@
                                 (list "idle-seconds" idle)
                                 (list "continuation" (+ used 1))
                                 (list "of" cap)
+                                ;; Carried so the second stage can record this
+                                ;; without re-reading the rollout it cannot see.
+                                (list "message" (clip decision hook-command-limit))
                                 (list "queued"
                                       (if act?
                                           (let ((sent (codex-queue! thread decision)))

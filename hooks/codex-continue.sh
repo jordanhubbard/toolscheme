@@ -49,11 +49,30 @@ export TOOLSCHEME_CODEX_SOCKET
 
 # Rooted at the transcripts, which is the only thing it reads; `codex` is the
 # only program it may run, and queueing a message is all it does with it.
-TOOLSCHEME_LIB="$HOME_DIR/lib" \
+REPORT=$(TOOLSCHEME_LIB="$HOME_DIR/lib" \
 "$BIN" "$HOME_DIR/hooks/codex-continue.scm" \
   --root "$SESSIONS" \
   --lib "$HOME_DIR/lib" \
   --allow-process --allow-program codex --allow-program curl \
-  --text 2>/dev/null
+  --text 2>/dev/null)
+
+echo "$REPORT"
+
+# Second stage, rooted at the state directory rather than the rollouts, because
+# there is one filesystem root per run and the observation log's path is
+# relative to it. Folded into the scan, the append reported success while
+# landing in ~/.codex/sessions/observations.jsonl, where nothing reads it. No
+# process privileges here: this only writes a line.
+case "$REPORT" in
+  *'"queued":"sent"'*|*'"queued": "sent"'*)
+    TOOLSCHEME_CODEX_REPORT="$REPORT" TOOLSCHEME_LIB="$HOME_DIR/lib" \
+    "$BIN" "$HOME_DIR/hooks/codex-record.scm" \
+      --root "$STATE" \
+      --lib "$HOME_DIR/lib" \
+      --text >/dev/null 2>&1
+    ;;
+esac
+
+exit 0
 
 exit 0
