@@ -236,6 +236,32 @@ changes nothing about what the call returns, so it cannot be wrong about the
 answer -- only about whether it was worth the context it cost. Which makes staying
 quiet the property worth getting right, and most of what is tested.
 
+## When advice is not enough
+
+Advice on fixed waits was measured and did not work. The `wait-for` instruction
+was already in `AGENTS.md` and `CLAUDE.md` before the corpus window and the
+sleeping continued at 370, 190, 155, 87 and 125 a day after it; the hook note
+fired correctly and was read past. Advice is added to the context and skimmed.
+
+`TOOLSCHEME_REFUSE_SLEEP=1` declines the call instead, above
+`TOOLSCHEME_REFUSE_SLEEP_MS` (10s by default). A denial cannot be skimmed. It
+names `wait-for` when the condition is local, and offers short polling when it is
+not -- 407 of the waits measured were on something remote with nothing local to
+watch, and a rule with no correct answer to offer gets switched off within a day.
+
+Measured over 20,774 calls either side of the day it was switched on:
+
+| | before | after |
+|---|---:|---:|
+| waits under the threshold | 15 | 15 |
+| waits at or over it | 32 | 2 |
+
+Short polling is untouched, which is the point: a general fall in activity would
+have moved both rows. The observation is appended before the decision is taken,
+so these are requests rather than waits -- meaning agents stopped *asking*, not
+merely that they were blocked -- and one of the two survivors is a command this
+project's own author had refused. See `experiments/corpus/sleep-refusal.scm`.
+
 Advice alone carries no `permissionDecision`: Codex rejects `allow` unless a
 rewrite accompanies it, and adding one would turn a note into a permission grant
 the hook never meant to make.

@@ -36,8 +36,22 @@
                                                'text ""))
                                   'lines)))))
 
-(define continuations
+;; Every record written after the queue began checking its exit status carries a
+;; `detail` field, and none written before it does. That is the cutoff, and it is
+;; read from the record's own shape rather than from a date typed in here, which
+;; would be a second thing to keep true.
+(define (trustworthy? record) (and (assoc "detail" record) #t))
+
+(define all-continuations
   (filter (lambda (r) (equal? (field-ref r "event" "") "continued")) rows))
+
+(define continuations (filter trustworthy? all-continuations))
+
+;; Attempts that never arrived. Before the fix these were recorded as successes
+;; and are indistinguishable from real ones; after it they are their own event,
+;; and a rising count here means threads are being named that cannot be reached.
+(define failures
+  (filter (lambda (r) (equal? (field-ref r "event" "") "continue-failed")) rows))
 
 ;; Work is a tool call in the same session, after the continuation, inside the
 ;; window. A continuation that produced none is one that talked an agent into
@@ -71,4 +85,8 @@
       (list 'produced-nothing (count-if (lambda (o) (= (field-ref o 'calls-after 0) 0)) outcomes))
       (list 'total-calls-after
             (fold-left (lambda (n o) (+ n (field-ref o 'calls-after 0))) 0 outcomes))
+      (list 'failed-to-arrive (length failures))
+      ;; Named rather than silently dropped, so the count above is not mistaken
+      ;; for the whole log by anyone who remembers a larger number.
+      (list 'excluded-as-unreliable (- (length all-continuations) (length continuations)))
       (list 'detail outcomes))
