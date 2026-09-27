@@ -8,6 +8,17 @@
 ;;; from one the human answered.
 ;;;
 ;;; Run against $XDG_STATE_HOME/toolscheme.
+;;;
+;;; The log this reads is contaminated for Codex before 2026-09-27. A misread
+;;; exit status meant every `codex queue` was recorded as delivered, including
+;;; the ones failing with "no rollout found for thread id", and since nothing
+;;; was delivered nothing advanced the count, so the same thread was continued
+;;; every minute: 432 records on one thread and 15 on another, none of which
+;;; produced any work because none of them arrived. They are left in place --
+;;; the log is append-only and is now the ledger the cap counts from, so
+;;; rewriting it would be worse than the contamination -- but any rate computed
+;;; across that window is meaningless. Read `produced-nothing` with that in
+;;; mind, and prefer sessions after the fix.
 
 (define window-ms 300000)   ; five minutes is long enough for a turn to do work
 

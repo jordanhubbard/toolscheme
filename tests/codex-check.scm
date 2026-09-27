@@ -17,6 +17,9 @@
 (define idle 600)
 (define cap 3)
 
+;; A ledger as codex-used-counts builds one: two delivered, five attempted.
+(define ledger (list (cons "t1" (list (list "sent" 2) (list "attempts" 5)))))
+
 ;; A real rollout name. The thread id is read from it rather than from the file.
 (define real-name
   "2026/09/18/rollout-2026-09-18T12-49-55-01a0b611-81a6-7183-ad6b-b81ba12f99f6.jsonl")
@@ -92,4 +95,34 @@
                  (not (codex-continue-decision "assistant" summary idle 3 cap))
                  (= (codex-count-marks both-records-of-one-continuation) 1)
                  (string-contains? (codex-continuation-text 0 3) codex-continuation-mark)
-                 (not (codex-enabled?)))))
+                 (not (codex-enabled?))
+
+                 ;; "Delivered" has to mean delivered. Read from the wrong field
+                 ;; -- `process-wait` answers `exit-status`, this asked for
+                 ;; `status` -- every queue looked successful, including the ones
+                 ;; exiting 1 with "no rollout found for thread id". Nothing was
+                 ;; delivered, so no continuation was ever recorded, so the count
+                 ;; stayed at zero and the next tick tried again: 431 times on
+                 ;; one thread against a cap of 2.
+                 (codex-delivered? (list (list "delivered" #t) (list "exit-status" 0)))
+                 (not (codex-delivered? (list (list "delivered" #f) (list "exit-status" 1))))
+                 (not (codex-delivered? (list (list "error" "boom"))))
+
+                 ;; The ledger, not the transcript. An unknown thread reads zero
+                 ;; on both counters rather than failing.
+                 (= (field-ref (codex-used-of '() "nobody") "sent" -1) 0)
+                 (= (field-ref (codex-used-of '() "nobody") "attempts" -1) 0)
+                 (= (field-ref (codex-used-of ledger "t1") "sent" -1) 2)
+                 (= (field-ref (codex-used-of ledger "t1") "attempts" -1) 5)
+
+                 ;; The backstop. Capping deliveries alone still permits an
+                 ;; unbounded loop whenever delivery fails, because a failure
+                 ;; advances nothing -- which is the loop that ran for twelve
+                 ;; hours. Attempts are bounded too, so an unreachable thread is
+                 ;; abandoned instead of retried until it ages out.
+                 (= (codex-attempt-cap 2) 6)
+                 (> (codex-attempt-cap cap) cap)
+
+                 ;; Both outcomes are recorded. Recording only successes is what
+                 ;; left the failures invisible to the next tick.
+                 (= (codex-record-all! '()) 0))))

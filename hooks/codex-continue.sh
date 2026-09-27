@@ -47,9 +47,24 @@ fi
 TOOLSCHEME_CODEX_SOCKET="${TOOLSCHEME_CODEX_SOCKET:-$STATE/run/codex.sock}"
 export TOOLSCHEME_CODEX_SOCKET
 
-# Rooted at the transcripts, which is the only thing it reads; `codex` is the
-# only program it may run, and queueing a message is all it does with it.
-REPORT=$(TOOLSCHEME_LIB="$HOME_DIR/lib" \
+# Three stages, because there is one filesystem root per run and this needs two:
+# the rollouts, which it reads, and the state directory, which holds the ledger
+# the cap is counted from. Folding them together by widening the root to $HOME
+# would hand a timer-driven job that already holds process privileges the run of
+# the home directory, which is the wrong trade.
+#
+# 1. How many times each thread has already been continued. State directory,
+#    no process access.
+USED=$(TOOLSCHEME_LIB="$HOME_DIR/lib" \
+"$BIN" "$HOME_DIR/hooks/codex-used.scm" \
+  --root "$STATE" \
+  --lib "$HOME_DIR/lib" \
+  --text 2>/dev/null)
+
+# 2. Decide and queue. Rooted at the transcripts, which is the only thing it
+#    reads; `codex` is the only program it may run, and queueing a message is
+#    all it does with it.
+REPORT=$(TOOLSCHEME_CODEX_USED="$USED" TOOLSCHEME_LIB="$HOME_DIR/lib" \
 "$BIN" "$HOME_DIR/hooks/codex-continue.scm" \
   --root "$SESSIONS" \
   --lib "$HOME_DIR/lib" \
@@ -58,13 +73,12 @@ REPORT=$(TOOLSCHEME_LIB="$HOME_DIR/lib" \
 
 echo "$REPORT"
 
-# Second stage, rooted at the state directory rather than the rollouts, because
-# there is one filesystem root per run and the observation log's path is
-# relative to it. Folded into the scan, the append reported success while
-# landing in ~/.codex/sessions/observations.jsonl, where nothing reads it. No
-# process privileges here: this only writes a line.
+# 3. Record every attempt, delivered or not. A failure that leaves no trace is
+#    what made this unbounded: the next tick saw a thread that had never been
+#    continued and tried again, 431 times on one thread. No process privileges
+#    here; it only appends a line.
 case "$REPORT" in
-  *'"queued":"sent"'*|*'"queued": "sent"'*)
+  *'"queued":"sent"'*|*'"queued":"failed"'*)
     TOOLSCHEME_CODEX_REPORT="$REPORT" TOOLSCHEME_LIB="$HOME_DIR/lib" \
     "$BIN" "$HOME_DIR/hooks/codex-record.scm" \
       --root "$STATE" \

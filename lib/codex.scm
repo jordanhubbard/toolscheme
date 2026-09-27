@@ -167,14 +167,82 @@
               (string-contains? (field-ref match 'text "") codex-user-turn-shape))
             matches))
 
+;; Counting continuations by grepping the rollout is what this used to do, and it
+;; cannot work. A transcript is not a ledger: it records what was *delivered*, so
+;; a failed queue leaves no trace and the count stays at zero forever; and Codex
+;; compacts long threads, so even a delivered continuation is eventually rewritten
+;; out of existence and the count falls back to zero. Both were observed -- 431
+;; continuations on one thread against a cap of 2, and the only two surviving
+;; marks on it sitting inside `"type":"compacted"` records.
+;;
+;; The observation log is the ledger: append-only, never rewritten, and already
+;; the place both agents record a continuation. Kept for the tests and for
+;; reading a transcript by hand; not for deciding anything.
 (define (codex-marks path)
   (let ((hits (catch-errors (lambda () (grep codex-continuation-mark (list 'files path))))))
     (if (error? hits) 0 (codex-count-marks (field-ref hits 'matches '())))))
+
+;; What the ledger says about one thread: how many continuations were delivered,
+;; and how many were attempted. The second number is the backstop. A cap on
+;; deliveries alone still permits an unbounded loop whenever delivery fails,
+;; which is exactly the failure that happened -- so attempts are bounded too, and
+;; a thread that cannot be reached is abandoned rather than retried forever.
+(define codex-attempt-multiple 3)
+
+(define (codex-attempt-cap cap) (* cap codex-attempt-multiple))
+
+(define (codex-used-of counts thread)
+  (let ((row (assoc thread counts)))
+    (if row (cdr row) (list (list "sent" 0) (list "attempts" 0)))))
+
+;; Reads the observation log, which means this runs rooted at the state
+;; directory -- a different root from the scan, which is why the watcher is
+;; staged rather than a single pass.
+(define (codex-used-counts)
+  (let* ((text (let ((r (catch-errors
+                          (lambda () (read-file (hook-log-path) '((limit 268435456)))))))
+                 (if (error? r) "" (field-ref r 'text ""))))
+         (lines (field-ref (text-lines text) 'lines '())))
+    (fold-left
+      (lambda (counts line)
+        (if (or (string-null? line)
+                (not (string-contains? line "\"agent\":\"codex\""))
+                (not (string-contains? line "continu")))
+            counts
+            (let ((parsed (catch-errors (lambda () (json-parse line)))))
+              (if (error? parsed)
+                  counts
+                  (let* ((row (field-ref parsed 'value))
+                         (event (field-ref row "event" ""))
+                         (thread (field-ref row "session" "")))
+                    (if (or (string-null? thread)
+                            (not (or (equal? event "continued")
+                                     (equal? event "continue-failed"))))
+                        counts
+                        (let* ((prior (codex-used-of counts thread))
+                               (sent (+ (field-ref prior "sent" 0)
+                                        (if (equal? event "continued") 1 0)))
+                               (attempts (+ (field-ref prior "attempts" 0) 1)))
+                          (cons (cons thread (list (list "sent" sent)
+                                                   (list "attempts" attempts)))
+                                (filter (lambda (r) (not (equal? (car r) thread)))
+                                        counts)))))))))
+      '() lines)))
 
 (define (codex-tail path)
   (let ((read (catch-errors (lambda () (tail (list 'files path) '((count 40)))))))
     (if (error? read) '() (field-ref read 'lines '()))))
 
+;; Delivered, not merely attempted. The exit status is the whole point of this
+;; procedure and it used to be read from the wrong field -- `process-wait`
+;; answers `exit-status`, this asked for `status` and always got the -1 default
+;; -- while the caller tested only whether the *process* had errored. So a queue
+;; that exited 1 saying "no rollout found for thread id" was reported as sent.
+;;
+;; That single misread field is what made the loop unbounded: nothing was
+;; delivered, so no evidence of a continuation ever appeared, so the count of
+;; continuations stayed at zero and the next tick tried again. 431 times against
+;; a cap of 2, on one thread, over twelve hours.
 (define (codex-queue! thread message)
   (let* ((socket (codex-socket))
          (started (catch-errors
@@ -188,13 +256,25 @@
                                           "--message" message))
                               (list 'timeout-ms 30000)))))))
     (if (error? started)
-        started
+        (list (list "thread" thread) (list "delivered" #f)
+              (list "exit-status" -1) (list "detail" "could not start codex"))
         (let ((finished (catch-errors (lambda () (process-wait (field-ref started 'job))))))
           (if (error? finished)
-              finished
-              (list (list "thread" thread)
-                    (list "status" (field-ref finished 'status -1))
-                    (list "output" (string-trim (field-ref finished 'stdout "")))))))))
+              (list (list "thread" thread) (list "delivered" #f)
+                    (list "exit-status" -1) (list "detail" "codex queue did not finish"))
+              (let ((status (field-ref finished 'exit-status -1)))
+                (list (list "thread" thread)
+                      (list "delivered" (equal? status 0))
+                      (list "exit-status" status)
+                      (list "detail"
+                            (clip (string-trim
+                                    (if (equal? status 0)
+                                        (field-ref finished 'stdout "")
+                                        (field-ref finished 'stderr "")))
+                                  400)))))))))
+
+(define (codex-delivered? result)
+  (and (not (error? result)) (field-ref result "delivered" #f) #t))
 
 ;; The same record the Claude Code path writes in [[continue]], so that one
 ;; question -- what did each continuation produce -- can be asked of both without
@@ -216,12 +296,12 @@
 ;; privileges the run of the home directory, which is the wrong trade.
 ;;
 ;; Wrapped, because a watcher on a timer must not fail over its own bookkeeping.
-(define (codex-record! thread continuation cap message)
+(define (codex-record! thread event continuation cap message detail)
   (catch-errors
     (lambda ()
       (hook-append
         (list (list "source" "toolscheme-hook")
-              (list "event" "continued")
+              (list "event" event)
               (list "agent" "codex")
               (list "session" thread)
               (list "tool" "")
@@ -229,26 +309,32 @@
               (list "continuation" continuation)
               (list "of" cap)
               (list "message" (clip message hook-command-limit))
+              (list "detail" (clip detail 400))
               (list "at" (field-ref (time) 'epoch-milliseconds))
               (list "bytes" 0))))))
 
-;; Records every thread the scan actually queued into. Takes the scan's own
-;; report, so the two stages cannot disagree about what happened.
+;; Records every attempt, delivered or not. Recording only successes is what
+;; allowed the loop to run unbounded: a failure left nothing behind, so the next
+;; tick saw a thread that had never been continued and tried again, forever.
+;; Failures are the entries that stop it.
 (define (codex-record-all! threads)
   (fold-left
     (lambda (n thread)
-      (if (equal? (field-ref thread "queued" "") "sent")
-          (begin (codex-record! (field-ref thread "thread" "")
-                                (field-ref thread "continuation" 0)
-                                (field-ref thread "of" 0)
-                                (field-ref thread "message" ""))
-                 (+ n 1))
-          n))
+      (let ((queued (field-ref thread "queued" "")))
+        (if (or (equal? queued "sent") (equal? queued "failed"))
+            (begin (codex-record! (field-ref thread "thread" "")
+                                  (if (equal? queued "sent") "continued" "continue-failed")
+                                  (field-ref thread "continuation" 0)
+                                  (field-ref thread "of" 0)
+                                  (field-ref thread "message" "")
+                                  (field-ref thread "detail" ""))
+                   (+ n 1))
+            n)))
     0 threads))
 
 ;; One pass over every thread on the machine. Returns what it looked at and what
 ;; it did, so a dry run reads the same as a live one minus the queueing.
-(define (codex-scan act?)
+(define (codex-scan act? counts)
   (let ((now (codex-now-seconds))
         (cap (continue-cap)))
     (fold-left
@@ -258,25 +344,37 @@
           (if (or (string-null? thread) (< idle (codex-idle-seconds))
                   (> idle (codex-stale-seconds)))
               report
-              (let* ((spoken (codex-last-exchange (codex-tail path)))
+              (let* ((prior (codex-used-of counts thread))
+                     (used (field-ref prior "sent" 0))
+                     (attempts (field-ref prior "attempts" 0))
+                     (spoken (codex-last-exchange (codex-tail path)))
                      (role (if spoken (car spoken) ""))
                      (message (if spoken (car (cdr spoken)) ""))
-                     (used (codex-marks path))
-                     (decision (codex-continue-decision role message idle used cap)))
+                     ;; The attempt bound is checked first and separately, so a
+                     ;; thread that cannot be reached is abandoned rather than
+                     ;; retried every minute until it ages out.
+                     (decision (if (>= attempts (codex-attempt-cap cap))
+                                   #f
+                                   (codex-continue-decision role message idle used cap))))
                 (if (not decision)
                     report
-                    (cons (list (list "thread" thread)
-                                (list "idle-seconds" idle)
-                                (list "continuation" (+ used 1))
-                                (list "of" cap)
-                                ;; Carried so the second stage can record this
-                                ;; without re-reading the rollout it cannot see.
-                                (list "message" (clip decision hook-command-limit))
-                                (list "queued"
-                                      (if act?
-                                          (let ((sent (codex-queue! thread decision)))
-                                            (if (error? sent) "failed" "sent"))
-                                          "dry-run")))
+                    (cons (let ((sent (if act? (codex-queue! thread decision) #f)))
+                            (list (list "thread" thread)
+                                  (list "idle-seconds" idle)
+                                  (list "continuation" (+ used 1))
+                                  (list "of" cap)
+                                  (list "attempts" (+ attempts 1))
+                                  ;; Carried so the recording stage can write this
+                                  ;; without re-reading the rollout it cannot see.
+                                  (list "message" (clip decision hook-command-limit))
+                                  (list "detail"
+                                        (if (and act? (not (error? sent)))
+                                            (field-ref sent "detail" "")
+                                            ""))
+                                  (list "queued"
+                                        (cond ((not act?) "dry-run")
+                                              ((codex-delivered? sent) "sent")
+                                              (else "failed")))))
                           report)))))
         )
       '() (codex-rollout-paths))))
