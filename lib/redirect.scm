@@ -318,14 +318,28 @@
     (and (number? predicted) (>= predicted (redirect-min-bytes)))))
 
 (define (hook-decision request)
+  (cdr (hook-decision-with-rule request)))
+
+;; Which rule answered, paired with the answer. `hook-run` records the name,
+;; because a rule that fires and leaves no trace cannot be judged afterwards --
+;; and the redirect was in exactly that position: switched on in production for
+;; days, with no way to tell whether it had ever rewritten a single call. The
+;; observation was logged; the decision about it was not.
+;;
+;; `hook-decision` stays as it was so that nothing which only wants the answer
+;; has to know about this.
+(define (hook-decision-with-rule request)
   (let ((event (field-ref request "hook_event_name" "")))
-    (cond ((equal? event "SessionStart") (session-decision request))
+    (cond ((equal? event "SessionStart") (cons "session" (session-decision request)))
           ((equal? event "Stop")
            (let ((decision (catch-errors (lambda () (continue-decision request)))))
-             (if (or (error? decision) (not decision)) #f decision)))
-          (else (tool-decision request)))))
+             (cons "continue" (if (or (error? decision) (not decision)) #f decision))))
+          (else (tool-decision-with-rule request)))))
 
 (define (tool-decision request)
+  (cdr (tool-decision-with-rule request)))
+
+(define (tool-decision-with-rule request)
   (let* ((waited (catch-errors (lambda () (sleep-decision request))))
          (refused (catch-errors (lambda () (dogfood-decision request))))
          (bounded (catch-errors (lambda () (bound-read-decision request))))
@@ -341,14 +355,42 @@
       ;; A refusal ends it: there is nothing to advise about a call that will
       ;; not run, and nothing to rewrite. The wait is checked first because it
       ;; is the larger waste and the more specific complaint.
-      ((and (not (error? waited)) waited) waited)
-      ((and (not (error? refused)) refused) refused)
+      ((and (not (error? waited)) waited) (cons "refuse-sleep" waited))
+      ((and (not (error? refused)) refused) (cons "dogfood" refused))
       ;; A bounded read is a complete decision on its own.
-      ((and (not (error? bounded)) bounded) bounded)
-      ((and (not rewriting) (not advising)) #f)
-      ((not rewriting) (advice-only-decision advising))
-      ((not advising) rewriting)
-      (else (decision-with-advice rewriting advising)))))
+      ((and (not (error? bounded)) bounded) (cons "bound-read" bounded))
+      ((and (not rewriting) (not advising)) (cons "" #f))
+      ((not rewriting) (cons "steer" (advice-only-decision advising)))
+      ((not advising) (cons "redirect" rewriting))
+      (else (cons "redirect+steer" (decision-with-advice rewriting advising))))))
+
+;; Small on purpose. The question this answers is "which rule fired, on what,
+;; how often" -- the decision itself is reconstructible from the rule and the
+;; command, and copying it in would put a refusal's whole explanatory paragraph
+;; into the log on every sleep.
+;; Built separately from being written, so that a test can check the record
+;; without putting an observation log in whatever directory it runs from. That
+;; separation is also what makes the names testable: `record-decision!` is
+;; wrapped in `catch-errors` at its only call site -- correctly, since
+;; bookkeeping must not cost the agent a call -- and that wrapper silently
+;; swallowed two misspelled names while this was being written. A recorder that
+;; records nothing is precisely the failure it exists to prevent.
+(define (decision-record request rule)
+  (list (list "source" "toolscheme-hook")
+        (list "event" "decided")
+        (list "rule" rule)
+        (list "agent" (hook-agent-of request))
+        (list "session" (field-ref request "session_id" ""))
+        (list "tool" (field-ref request "tool_name" ""))
+        (list "command" (clip (hook-command-of (field-ref request "tool_input" '()))
+                              hook-command-limit))
+        (list "at" (field-ref (time) 'epoch-milliseconds))
+        (list "bytes" 0)))
+
+(define (record-decision! request rule)
+  (if (string-null? rule)
+      #f
+      (hook-append (decision-record request rule))))
 
 (define (hook-run)
   (let ((request (catch-errors (lambda () (hook-request)))))
@@ -369,7 +411,14 @@
                                           0
                                           (string-length (write-to-string response)))))
                   #f)))
-          (let ((decision (catch-errors (lambda () (hook-decision request)))))
-            (if (or (error? decision) (not decision))
+          (let* ((answered (catch-errors (lambda () (hook-decision-with-rule request))))
+                 (rule (if (error? answered) "" (car answered)))
+                 (decision (if (error? answered) #f (cdr answered))))
+            (if (not decision)
                 ""
-                (field-ref (json-write decision) 'text)))))))
+                (begin
+                  ;; Recorded before the decision is handed back, and wrapped,
+                  ;; because bookkeeping must not be able to cost the agent a
+                  ;; call it was going to get.
+                  (catch-errors (lambda () (record-decision! request rule)))
+                  (field-ref (json-write decision) 'text))))))))

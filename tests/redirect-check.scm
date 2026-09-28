@@ -12,6 +12,10 @@
         (list "cwd" "/w")
         (list "tool_input" (list (list "command" command)))))
 
+;; Carries `turn_id`, which is how a request is known to have come from Codex.
+(define decided-request
+  (cons (list "turn_id" "t1") (cons (list "session_id" "s1") (request-for "sleep 40"))))
+
 ;; Codex in code mode wraps the shell in JavaScript. A rewrite has to land inside
 ;; that wrapper, not replace it.
 (define codex-request
@@ -121,4 +125,28 @@
                  (eq? not-worth-it #f)
                  (eq? unseen-program #f)
                  (= (predicted-output-bytes "grep -n y g.c") 9000)
-                 (not (redirect-enabled?)))))
+                 (not (redirect-enabled?))
+
+                 ;; Which rule answered, which is what gets logged. The redirect
+                 ;; ran in production for days with no way to tell whether it had
+                 ;; ever rewritten a call: the observation was recorded and the
+                 ;; decision about it was not.
+                 (equal? (car (tool-decision-with-rule decided-request)) "")
+                 (not (cdr (tool-decision-with-rule decided-request)))
+
+                 ;; Built here rather than written, and without the catch-errors
+                 ;; that wraps the write in `hook-run` -- that wrapper is right in
+                 ;; production and hid two misspelled names while this was being
+                 ;; written, so something has to evaluate this unprotected.
+                 (equal? (field-ref (decision-record decided-request "refuse-sleep")
+                                    "rule" "")
+                         "refuse-sleep")
+                 (equal? (field-ref (decision-record decided-request "refuse-sleep")
+                                    "agent" "")
+                         "codex")
+                 (equal? (field-ref (decision-record decided-request "refuse-sleep")
+                                    "command" "")
+                         "sleep 40")
+                 ;; Nothing is written when no rule fired, or every call that
+                 ;; passed cleanly would be logged twice.
+                 (not (record-decision! decided-request "")))))

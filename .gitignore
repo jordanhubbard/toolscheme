@@ -17,3 +17,7 @@ dist/
 __pycache__/
 .check-root/
 .mini/
+
+# Memoised output sizes: local measurement, written relative to the sandbox
+# root, so it lands here whenever a hook is exercised from the checkout.
+memo/

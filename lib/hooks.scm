@@ -65,6 +65,19 @@
 
 ;; The shape of a record is chosen so the analyzer can read it as a third
 ;; transcript schema rather than needing a separate pipeline.
+;; Which agent a request came from. `turn_id` is Codex's own documented extension
+;; to the hook payload and Claude Code does not send it, which is a more reliable
+;; marker than the tool name: both spell a shell call "Bash". Worth keeping,
+;; because the two have measurably different habits and a merged corpus that
+;; cannot tell them apart averages them.
+;;
+;; Named rather than inlined because the decision log needs the same answer, and
+;; two copies of this would drift the moment either agent changed its payload.
+(define (hook-agent-of request)
+  (cond ((not (absent? (field-ref request "turn_id" #f))) "codex")
+        ((not (absent? (field-ref request "prompt_id" #f))) "claude-code")
+        (else "unknown")))
+
 (define (hook-observation request)
   (let* ((event (field-ref request "hook_event_name" ""))
          ;; A failed call fires PostToolUseFailure, not PostToolUse. Testing only
@@ -87,9 +100,7 @@
           ;; is a more reliable marker than the tool name: both spell a shell call
           ;; "Bash". Worth keeping, because the two have measurably different
           ;; habits and a merged corpus that cannot tell them apart averages them.
-          (list "agent" (cond ((not (absent? (field-ref request "turn_id" #f))) "codex")
-                              ((not (absent? (field-ref request "prompt_id" #f))) "claude-code")
-                              (else "unknown")))
+          (list "agent" (hook-agent-of request))
           (list "event" (if finished "post" "pre"))
           (list "ok" (not (string=? event "PostToolUseFailure")))
           (list "session" (field-ref request "session_id" ""))
