@@ -52,6 +52,19 @@
           (string-contains? shim socket-path)
           (string-contains? shim "chmod 700")
 
+          ;; `codex update` exists, so the binary under the shim changes without
+          ;; warning. `--remote` belongs to a subcommand codex itself labels
+          ;; experimental; if a release drops it, an unconditional exec hands
+          ;; codex a flag it does not know and every session dies -- because of a
+          ;; shim the user did not put on their PATH. So the flag is checked
+          ;; before it is used, and a release without it becomes a pass-through.
+          (string-contains? shim "--help")
+          (string-contains? shim "capability")
+          ;; And an app server started by the old binary survives the update, so
+          ;; a new client would speak to a stale server. It is restarted when the
+          ;; binary changes rather than left to fail however a version skew fails.
+          (string-contains? shim "pkill -f")
+
           ;; The watcher must agree with it, since it is the side that connects.
           (string-contains? watcher socket-path)
 

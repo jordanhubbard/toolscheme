@@ -446,6 +446,26 @@ the setting, so anything already running is not reachable. And every session
 shares one app-server process, which is a failure mode a plain `codex` does not
 have: if that process dies, the sessions attached to it go with it.
 
+### When Codex updates itself
+
+`codex update` replaces the binary underneath the shim, and `--remote` belongs to
+`remote-control`, which Codex labels experimental. A release that drops or renames
+it would leave the shim handing Codex a flag it does not know, and every session
+would die because of a wrapper the user did not put on their PATH. So the shim
+checks the flag before using it and passes through unchanged when it is gone --
+a plain session is worth more than a continuable one. It also restarts the app
+server when the binary changes, since a server started by the old version
+survives the update and a new client would otherwise talk to a stale one.
+
+Both checks key on the binary's size and mtime rather than running
+`codex --version`, so the common path is a `stat` and not a node startup in front
+of every launch. The answer is cached in `$STATE/run/capability`.
+
+What the shim cannot defend against is an installer that writes its own `codex`
+over the symlink in `~/.local/bin`. Nothing breaks if that happens -- you get
+ordinary Codex -- but continuation stops silently. `make install-codex-shim` is
+idempotent and puts it back.
+
 ## Keeping the installation current
 
 The hook runs the *installed* copy, not the checkout. After changing anything under

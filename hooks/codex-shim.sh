@@ -88,6 +88,49 @@ SOCKDIR=$(dirname "$SOCK")
 mkdir -p "$SOCKDIR" 2>/dev/null || exec "$REAL" "$@"
 chmod 700 "$SOCKDIR" 2>/dev/null || exec "$REAL" "$@"
 
+# `codex update` exists, so the binary under this shim changes without warning,
+# and two things break quietly when it does.
+#
+# `--remote` belongs to `remote-control`, which codex itself labels
+# experimental. If a release drops or renames it, the exec at the bottom of this
+# file hands codex a flag it does not know and every session dies -- with a shim
+# in PATH the user did not put there. Rule 1 says never fail closed, and an
+# unconditional exec is exactly failing closed on someone else's release
+# schedule. So the flag is checked before it is used.
+#
+# And an app server started by the old binary keeps running after an update, so
+# a new client would talk to a stale server. The server is restarted when the
+# binary changes rather than left to fail in whatever way a version skew fails.
+#
+# Both checks key on the binary's size and mtime, which is a stat rather than a
+# process: spawning `codex --version` on every session start would put a node
+# startup in front of every launch to answer a question whose answer almost never
+# changes. Probing is what happens when the answer might have.
+CAPABILITY="$SOCKDIR/capability"
+STAMP=$(stat -c '%s %Y' "$REAL" 2>/dev/null || stat -f '%z %m' "$REAL" 2>/dev/null || echo "unknown")
+KNOWN=$(cat "$CAPABILITY" 2>/dev/null || echo "")
+
+case "$KNOWN" in
+  "$STAMP remote")
+    : ;;                       # this exact binary was checked and takes --remote
+  "$STAMP none")
+    exec "$REAL" "$@" ;;       # checked, and does not; do not probe it again
+  *)
+    # An unrecognised binary, so nothing cached about its predecessor applies.
+    if "$REAL" --help 2>/dev/null | grep -q -- '--remote'; then
+      [ "$STAMP" = "unknown" ] || printf '%s remote\n' "$STAMP" > "$CAPABILITY" 2>/dev/null
+    else
+      # No --remote in this release. A plain session is worth more than a
+      # continuable one, so this becomes a pass-through until someone looks.
+      [ "$STAMP" = "unknown" ] || printf '%s none\n' "$STAMP" > "$CAPABILITY" 2>/dev/null
+      exec "$REAL" "$@"
+    fi
+    # The binary moved under a server that may still be running from the old one.
+    pkill -f "app-server --listen unix://$SOCK" >/dev/null 2>&1
+    rm -f "$SOCK"
+    ;;
+esac
+
 # Reuse a running server; start one otherwise. A socket file left behind by a
 # crash would make every later session unreachable while looking fine, so the
 # check is for the process rather than the file.
