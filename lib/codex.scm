@@ -198,11 +198,55 @@
 ;; Reads the observation log, which means this runs rooted at the state
 ;; directory -- a different root from the scan, which is why the watcher is
 ;; staged rather than a single pass.
+;;
+;; The previous generation is read as well, because the log is append-only only
+;; until it rotates. At 64MB it becomes observations.jsonl.1 and the current file
+;; starts empty, so for a while after that every thread reads as never having
+;; been continued -- and a live thread would be continued up to the cap again,
+;; and an unreachable one retried up to the attempt bound again, every time the
+;; log turned over. Choosing this file as the ledger and then not noticing it is
+;; designed to be truncated would have put a smaller version of the same runaway
+;; on a six-day timer.
+;;
+;; One generation back is enough and two would be waste: a thread idle longer
+;; than `codex-stale-seconds` -- six hours by default -- is skipped by the scan
+;; regardless, and a generation holds days.
+;;
+;; And it is only read when the current log does not already reach back that far,
+;; which is exactly the window after a rotation. Reading it unconditionally cost
+;; 1.7 seconds of every minute here, because the previous generation is 155MB --
+;; a 3% duty cycle, permanently, to cover a few hours once every several days.
+(define (codex-log-text path)
+  (let ((r (catch-errors (lambda () (read-file path '((limit 268435456)))))))
+    (if (error? r) "" (field-ref r 'text ""))))
+
+;; The timestamp of the first record, or #f when there is nothing to read. Used
+;; only to decide whether the file reaches back far enough.
+(define (codex-log-starts-at lines)
+  (let loop ((rest lines))
+    (cond ((null? rest) #f)
+          ((string-null? (car rest)) (loop (cdr rest)))
+          (else
+            (let ((parsed (catch-errors (lambda () (json-parse (car rest))))))
+              (if (error? parsed)
+                  (loop (cdr rest))
+                  (let ((at (field-ref (field-ref parsed 'value) "at" #f)))
+                    (if (number? at) at (loop (cdr rest))))))))))
+
 (define (codex-used-counts)
-  (let* ((text (let ((r (catch-errors
-                          (lambda () (read-file (hook-log-path) '((limit 268435456)))))))
-                 (if (error? r) "" (field-ref r 'text ""))))
-         (lines (field-ref (text-lines text) 'lines '())))
+  (let* ((current (hook-log-path))
+         (own (field-ref (text-lines (codex-log-text current)) 'lines '()))
+         (starts (codex-log-starts-at own))
+         (reaches-back
+           (and starts
+                (<= starts (- (field-ref (time) 'epoch-milliseconds)
+                              (* 1000 (codex-stale-seconds))))))
+         (lines (if reaches-back
+                    own
+                    (append (field-ref (text-lines
+                                         (codex-log-text (hook-generation-path current 1)))
+                                       'lines '())
+                            own))))
     (fold-left
       (lambda (counts line)
         (if (or (string-null? line)

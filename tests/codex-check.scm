@@ -125,4 +125,19 @@
 
                  ;; Both outcomes are recorded. Recording only successes is what
                  ;; left the failures invisible to the next tick.
-                 (= (codex-record-all! '()) 0))))
+                 (= (codex-record-all! '()) 0)
+
+                 ;; How far back the log reaches decides whether the previous
+                 ;; generation has to be read as well. The log is append-only
+                 ;; only until it rotates, and a ledger that forgets everything
+                 ;; on rotation puts a smaller copy of the same runaway on a
+                 ;; six-day timer. Nothing to read is #f rather than zero, since
+                 ;; zero would read as "reaches back to the epoch" and suppress
+                 ;; the generation read exactly when it is needed.
+                 (not (codex-log-starts-at '()))
+                 (not (codex-log-starts-at '("" "not json at all")))
+                 (= (codex-log-starts-at (list "{\"event\":\"pre\",\"at\":1790000000000}"))
+                    1790000000000)
+                 ;; Unparsable lines are stepped over rather than stopping it.
+                 (= (codex-log-starts-at (list "{oops" "{\"at\":1790000000001}"))
+                    1790000000001))))
