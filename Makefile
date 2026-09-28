@@ -37,7 +37,7 @@ ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
                 -Wl,-rpath,'$(DUCKDB_RUNTIME)'
 endif
 
-.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall install-codex-shim uninstall-codex-shim vendor-duckdb FORCE clean learning-test install-test package
+.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall install-mcp uninstall-mcp install-codex-shim uninstall-codex-shim vendor-duckdb FORCE clean learning-test install-test package
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
@@ -222,7 +222,7 @@ install: toolscheme
 	     --claude-dir "$(CLAUDE_CONFIG_DIR)" --codex-dir "$(CODEX_HOME)"; fi
 	@echo "Then: toolscheme analyze $(STATEDIR)"
 
-uninstall: uninstall-codex-shim
+uninstall: uninstall-codex-shim uninstall-mcp
 	rm -f "$(BINDIR)/toolscheme"
 	rm -rf "$(SHAREDIR)"
 	@echo "removed the binary and $(SHAREDIR); observations in $(STATEDIR) are left alone"
@@ -257,6 +257,44 @@ install-codex-shim: install
 	   echo "warning: $(BINDIR) is not early enough on PATH -- codex still resolves to $$(command -v codex)"; \
 	 fi
 	@echo "it passes through unchanged unless TOOLSCHEME_CODEX_CONTINUE=1 is set"
+
+# Serve the published tools to the agents in-process, which is the delivery
+# mechanism this project's own measurements favour. Four separate attempts to
+# make substitution pay -- rewriting a command into a toolscheme call from the
+# hook -- all failed on the same arithmetic: a fresh interpreter costs 13-20ms
+# against roughly 1ms to fork the real program, so reproducing a command exactly
+# leaves nothing to win on. A server that is already running has no such start
+# cost, and can return a structured result instead of bytes to re-parse.
+#
+# Registered through each agent's own CLI rather than by editing its config,
+# because both ship one and hand-editing someone's primary tool's configuration
+# is how it gets corrupted. Removing first makes it idempotent.
+#
+# Not folded into `install`: it changes what tools an agent has, which is a
+# decision to take deliberately.
+install-mcp: install
+	@if command -v claude >/dev/null 2>&1; then \
+	   claude mcp remove -s user toolscheme >/dev/null 2>&1 || true; \
+	   claude mcp add -s user toolscheme -- "$(BINDIR)/toolscheme" mcp --lib "$(SHAREDIR)/lib" \
+	     >/dev/null 2>&1 \
+	     && echo "registered with Claude Code (user scope)" \
+	     || echo "warning: could not register with Claude Code"; \
+	 else echo "claude not found; skipped Claude Code"; fi
+	@if command -v codex >/dev/null 2>&1; then \
+	   codex mcp remove toolscheme >/dev/null 2>&1 || true; \
+	   codex mcp add toolscheme -- "$(BINDIR)/toolscheme" mcp --lib "$(SHAREDIR)/lib" \
+	     >/dev/null 2>&1 \
+	     && echo "registered with Codex (global)" \
+	     || echo "warning: could not register with Codex"; \
+	 else echo "codex not found; skipped Codex"; fi
+	@echo "the server is sandboxed to the directory the agent starts it in"
+
+uninstall-mcp:
+	@if command -v claude >/dev/null 2>&1; then \
+	   claude mcp remove -s user toolscheme >/dev/null 2>&1 || true; fi
+	@if command -v codex >/dev/null 2>&1; then \
+	   codex mcp remove toolscheme >/dev/null 2>&1 || true; fi
+	@echo "unregistered toolscheme from any agent that had it"
 
 uninstall-codex-shim:
 	@if [ -L "$(BINDIR)/codex" ]; then rm -f "$(BINDIR)/codex"; \

@@ -466,6 +466,36 @@ over the symlink in `~/.local/bin`. Nothing breaks if that happens -- you get
 ordinary Codex -- but continuation stops silently. `make install-codex-shim` is
 idempotent and puts it back.
 
+## Serving the tools instead of substituting them
+
+```
+make install-mcp      # registers with Claude Code and Codex
+make uninstall-mcp
+```
+
+This is where the measurements point. Four separate attempts to make
+*substitution* pay -- having the hook rewrite a command into a toolscheme call --
+failed on the same arithmetic: a fresh interpreter costs 13-20ms against roughly
+1ms to `fork` the real program, and reproducing a command's bytes exactly leaves
+time as the only axis to win on. A server that is already running has no start
+cost to amortise, and can answer with a structured result rather than bytes the
+model has to re-parse.
+
+Registered through each agent's own CLI -- `claude mcp add`, `codex mcp add` --
+rather than by editing configuration files, because both ship one and
+hand-editing someone's primary tool's config is how it gets corrupted. The
+targets remove before adding, so they are idempotent.
+
+Four tools are exposed: `toolscheme_eval`, and `read_line_range`,
+`read_text_bounded` and `search-read` from the published library.
+
+The server is sandboxed to the directory the agent starts it in, which is the
+project the agent is working on -- so it can read what the agent could already
+read, and nothing above it.
+
+Not part of `make install`, because it changes what tools an agent has and that
+is a decision to take deliberately rather than to inherit from a build step.
+
 ## Keeping the installation current
 
 The hook runs the *installed* copy, not the checkout. After changing anything under
