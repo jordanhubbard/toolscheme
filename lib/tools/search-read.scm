@@ -48,8 +48,23 @@
 ;; where there are no symbols: the same value shows up as ("glob" "..."), a bare
 ;; pattern string, or a plain array of paths. Accepting all of them here keeps one
 ;; tool usable from both callers instead of needing an MCP-shaped duplicate.
+;; A string that is itself written as a tagged source -- "(glob \"*.cpp\")" --
+;; is a caller who read the description and wrote what it implies. Treated as a
+;; glob pattern it matches no file and the tool answers `(count 0)` with no
+;; error, which reads as "your pattern is not in this codebase". That is the
+;; worst failure a tool can have: a confident wrong answer to a question the
+;; caller did not ask. It happened on the first real attempt to use this over
+;; MCP, and it happened to the person who wrote the tool.
+(define (tagged-string? s)
+  (and (string? s)
+       (string-prefix? "(" (string-trim s))
+       (or (string-contains? s "glob") (string-contains? s "files"))))
+
 (define (normalize-source source)
-  (cond ((string? source) (list 'glob source))
+  (cond ((tagged-string? source)
+         (let ((parsed (catch-errors (lambda () (read-from-string source)))))
+           (if (error? parsed) (list 'glob source) parsed)))
+        ((string? source) (list 'glob source))
         ((null? source) '())
         ((symbol? (car source)) source)
         ((and (string? (car source)) (string=? (car source) "glob"))

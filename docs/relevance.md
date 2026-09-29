@@ -59,6 +59,34 @@ tools that cannot bound themselves, so unbounded calls should be the expensive
 ones. They are the cheap ones -- mean 1,922 bytes against 4,955 for bounded
 calls, and not one of 3,526 exceeded 100KB.
 
+## The loop already said so, in its own artifacts
+
+Two tools were synthesized, gated by replay, and published to the state
+directory, where both agents are served them over MCP today. Each records what
+the replay measured in its own header:
+
+| tool | replaces | legacy bytes | candidate bytes |
+|---|---|---:|---:|
+| `read_line_range` | `sed -n 'A,Bp'` | 52,677 | 54,172 (+2.8%) |
+| `read_text_bounded` | `cat PATH` | 45,229 | 46,942 (+3.8%) |
+
+Both passed. The gate asks for equivalence and stability, and both are equivalent
+and stable; it does not require the replacement to be smaller. So the system
+wrote down, in the file it published, that its replacement costs more than the
+command it replaces -- and published it anyway.
+
+That is not a bug in the gate so much as the same structural fact seen from the
+inside. A replacement that must reproduce the original exactly cannot return less
+than the original, and the structure it adds to make the result typed is the
+extra 3%.
+
+Two smaller findings came out of the same place. Neither synthesized tool carries
+the structured `provenance` field the publication audit requires -- the evidence
+is in a prose header instead -- and the audit never noticed, because it runs with
+`TOOLSCHEME_STATE=` cleared and so sees only the repository's own `lib/tools`,
+while what agents are served comes from the state directory. A gate that does not
+look at what is actually served is not covering production.
+
 ## Why substitution cannot win, structurally
 
 Two reasons, and both are properties of the design rather than of the
