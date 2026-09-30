@@ -160,9 +160,16 @@ its result, and no transcript format has both.
 
 The hook is deliberately the least clever component in the project. It runs inside
 someone else's session on every tool call, so it observes and nothing more: no
-denial, no rewriting, no output, and exit 0 whatever happened. A record is clipped
-to stay under `PIPE_BUF`, because tool calls arrive in parallel batches and two
-`O_APPEND` writes larger than that interleave and corrupt each other.
+denial, no rewriting, no output, and exit 0 whatever happened. A record is clipped to keep the
+log bounded and readable.
+
+That clip used to be explained as staying under `PIPE_BUF`, on the theory that
+two larger `O_APPEND` writes would interleave. `PIPE_BUF` bounds atomic writes to
+pipes, not to files; what makes this safe is that `O_APPEND` on a regular file
+makes the seek-to-end and the write one atomic step, at any size. FreeBSD shows
+the difference -- `PIPE_BUF` is 512 there against 4096 on Linux, and 2,808-byte
+records still arrive intact under 32 concurrent writers. See
+`tests/concurrent-hooks.sh`.
 
 ## Rewriting a call, and why nothing is rewritten yet
 

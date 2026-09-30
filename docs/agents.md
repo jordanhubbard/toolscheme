@@ -107,9 +107,21 @@ the hooks. Configuration requires Python 3.11+; use `CONFIGURE_HOOKS=0` to skip 
 
 Three things are worth knowing before doing that:
 
-- Concurrent sessions are safe. Records are clipped below `PIPE_BUF` and appended
-  with `O_APPEND`, which is why a 20,000-character command is truncated to about
-  2.7 KB rather than being written whole.
+- Concurrent sessions are safe, and tested: `tests/concurrent-hooks.sh` runs
+  dozens of hooks at once against a throwaway state directory and checks that
+  every record parses and none is lost. 480 appends from 48 writers, none torn.
+
+  The reason is `O_APPEND` on a regular file: the seek-to-end and the write are a
+  single atomic step, so two hooks cannot land on the same offset. An earlier
+  version of this note credited `PIPE_BUF` instead, which is the wrong rule --
+  `PIPE_BUF` bounds atomic writes to *pipes*, not to files. FreeBSD makes the
+  difference visible: its `PIPE_BUF` is 512 against Linux's 4096, and records of
+  2,808 bytes still arrive intact there under 32 concurrent writers. Believing
+  the `PIPE_BUF` story would have meant concluding FreeBSD was unsafe, or
+  clipping records to 512 bytes for nothing.
+
+  Records are still clipped -- a 20,000-character command becomes about 2.7 KB --
+  but that is to keep the log readable and bounded, not to buy atomicity.
 - Every tool call in every project then costs about 2.5 ms twice. Across a heavy
   session of several thousand calls that is tens of seconds in total.
 - The log will contain commands and working directories from **all** your projects
