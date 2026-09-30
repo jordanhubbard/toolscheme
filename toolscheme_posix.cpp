@@ -36,6 +36,11 @@
 #elif defined(__APPLE__)
 #include <sys/mount.h>
 #include <sys/sysctl.h>
+#elif defined(__FreeBSD__)
+#include <sys/mount.h>
+#include <sys/sysctl.h>
+// kinfo_proc lives here on FreeBSD rather than in <sys/sysctl.h>.
+#include <sys/user.h>
 #endif
 
 extern char** environ;
@@ -1130,7 +1135,11 @@ private:
                                      : std::string(arguments[0].as_string());
         const Resolved resolved = resolve(path, true);
         if (!resolved.ok) return reject(resolved, "df", path);
-#if defined(__linux__) || defined(__APPLE__)
+        // No platform guard. `statvfs` is POSIX.1-2001 and <sys/statvfs.h> is
+        // included unconditionally above; guarding this on Linux-or-macOS was an
+        // allowlist of the two platforms it had been built on, which reported
+        // "statvfs is unavailable on this platform" on FreeBSD, where it has been
+        // available for twenty years.
         struct statvfs info {};
         if (::statvfs(resolved.path.c_str(), &info) != 0) return errno_error("df", errno, path);
         const std::int64_t block = static_cast<std::int64_t>(info.f_frsize);
@@ -1139,9 +1148,6 @@ private:
                           field("total", static_cast<std::int64_t>(info.f_blocks) * block),
                           field("free", static_cast<std::int64_t>(info.f_bfree) * block),
                           field("available", static_cast<std::int64_t>(info.f_bavail) * block)});
-#else
-        return unsupported_result("df", "statvfs is unavailable on this platform");
-#endif
     }
 
     Value run_dd(const std::vector<Value>& arguments) {
@@ -2395,6 +2401,23 @@ private:
         const std::size_t count = size / sizeof(struct kinfo_proc);
         for (std::size_t i = 0; i < count; ++i)
             out.emplace_back(entries[i].kp_proc.p_pid, entries[i].kp_proc.p_comm);
+#elif defined(__FreeBSD__)
+        // The same sysctl as macOS, but FreeBSD's kinfo_proc is flat -- `ki_pid`
+        // and `ki_comm` rather than a nested `kp_proc` -- so the two cannot share
+        // a branch. KERN_PROC_PROC asks for processes without their threads,
+        // which is what a process table means here.
+        int name[3] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC};
+        std::size_t size = 0;
+        if (::sysctl(name, 3, nullptr, &size, nullptr, 0) != 0) return out;
+        // The table can grow between sizing and reading, and a short read is an
+        // error rather than a truncation, so ask for room to spare.
+        size += size / 8 + sizeof(struct kinfo_proc) * 16;
+        std::vector<char> buffer(size);
+        if (::sysctl(name, 3, buffer.data(), &size, nullptr, 0) != 0) return out;
+        const auto* entries = reinterpret_cast<const struct kinfo_proc*>(buffer.data());
+        const std::size_t count = size / sizeof(struct kinfo_proc);
+        for (std::size_t i = 0; i < count; ++i)
+            out.emplace_back(entries[i].ki_pid, entries[i].ki_comm);
 #endif
         std::sort(out.begin(), out.end());
         return out;
@@ -2558,7 +2581,8 @@ public:
             return ok_result({field("seconds", static_cast<std::int64_t>(info.uptime)),
                               field("processes", static_cast<std::int64_t>(info.procs)),
                               field("load-1", static_cast<std::int64_t>(info.loads[0]))});
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+            // KERN_BOOTTIME is spelled and shaped identically on both.
             struct timeval boot {};
             std::size_t size = sizeof boot;
             int name[2] = {CTL_KERN, KERN_BOOTTIME};
