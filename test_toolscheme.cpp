@@ -299,10 +299,14 @@ const Example kExamples[] = {
 const std::set<std::string>& error_is_correct() {
     static const std::set<std::string> names = [] {
         std::set<std::string> out = {"procedure-ref"};
-#if defined(__APPLE__)
-        out.insert("systemctl");
-#else
+        // An init system belongs to exactly one platform, and on a third it is
+        // neither -- so this cannot be an either/or. Written that way, FreeBSD
+        // was required to produce a working `systemctl`.
+#if !defined(__APPLE__)
         out.insert("launchctl");
+#endif
+#if !defined(__linux__)
+        out.insert("systemctl");
 #endif
         return out;
     }();
@@ -967,10 +971,18 @@ static void task_19_23_adapters(Interpreter& vm) {
     error_code(vm, "(systemctl '((operation list)))", "unsupported",
                "task-23 systemctl is unsupported on Darwin");
     equal(vm, "(ok? (launchctl '((operation list))))", "#t", "task-23 launchctl runs on Darwin");
-#else
+#elif defined(__linux__)
     error_code(vm, "(launchctl '((operation list)))", "unsupported",
                "task-23 launchctl is unsupported off Darwin");
     equal(vm, "(ok? (systemctl '((operation list))))", "#t", "task-23 systemctl runs on Linux");
+#else
+    // A third POSIX host runs neither init system, and this used to assume that
+    // "not Darwin" meant Linux -- so FreeBSD was asked to produce a systemctl.
+    // Both names must report honestly rather than pretend.
+    error_code(vm, "(launchctl '((operation list)))", "unsupported",
+               "task-23 launchctl is unsupported off Darwin");
+    error_code(vm, "(systemctl '((operation list)))", "unsupported",
+               "task-23 systemctl is unsupported off Linux");
 #endif
 }
 
