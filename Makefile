@@ -37,7 +37,7 @@ ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
                 -Wl,-rpath,'$(DUCKDB_RUNTIME)'
 endif
 
-.PHONY: all test sanitize fuzz bench loop synthesize adoption check install uninstall install-mcp uninstall-mcp install-codex-shim uninstall-codex-shim vendor-duckdb FORCE clean learning-test install-test package
+.PHONY: all test sanitize fuzz bench loop adoption check install uninstall install-mcp uninstall-mcp install-codex-shim uninstall-codex-shim vendor-duckdb FORCE clean learning-test install-test package
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
@@ -87,16 +87,15 @@ toolscheme_bench: $(SOURCES) $(HEADERS) tests/bench_toolscheme.cpp
 bench: toolscheme_bench
 	./toolscheme_bench
 
-# The self-improvement loop, end to end. These cover the parts that fail silently
-# rather than loudly: intake reading both transcript schemas, a derived MCP schema
-# that is an object and not an array of pairs, and every synthesis response branch
-# including a refusal -- all without an API key. The live call is `make synthesize`.
+# The parts that fail silently rather than loudly: intake reading both transcript
+# schemas, the hook's decisions, the refusals, and the MCP handshake.
 #
-# Then the publication gate. A real fused tool and a deliberately lossy one are
-# replayed against the shell commands they claim to replace; the real one must
-# publish and the lossy one must be refused, even though it is stabler and cheaper.
-# A gate that cannot reject is not a gate. Needs a shell and grep, so it stays out
-# of the hermetic suite.
+# This used to end with the publication gate -- a real fused tool and a
+# deliberately lossy one replayed against the commands they claimed to replace.
+# That whole stack was removed in 0.5.0: measured against the corpus, a
+# substitution cannot win, because byte-identity makes the byte count equal by
+# construction and a shell call composes where a tool call does not. See
+# docs/relevance.md.
 
 # Each check prints its report and then has to contain the passing marker. The
 # report is captured and echoed rather than teed: `tee /dev/stderr` opens the
@@ -110,10 +109,9 @@ loop: toolscheme
 	@$(call check-scheme,tests/intake-check.scm --lib lib,(checks-hold #t))
 	@rm -rf .check-root && mkdir -p .check-root
 	@$(call check-scheme,tests/hook-check.scm --lib lib --root .check-root,(checks-hold #t))
-	@$(call check-scheme,tests/tools-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
 	@rm -rf .check-root && mkdir -p .check-root
-	@$(call check-scheme,tests/redirect-check.scm --lib lib --root .check-root,(checks-hold #t))
+	@$(call check-scheme,tests/decide-check.scm --lib lib --root .check-root,(checks-hold #t))
 	@rm -rf .check-root
 	@$(call check-scheme,tests/steer-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/sql-check.scm --lib lib,(checks-hold #t))
@@ -123,15 +121,6 @@ loop: toolscheme
 	@$(call check-scheme,tests/classify-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/dogfood-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/sleep-check.scm --lib lib,(checks-hold #t))
-	@$(call check-scheme,tests/pipeline-check.scm --lib lib --allow-process \
-	  --allow-program sh --allow-program sed --allow-program rg --allow-program cat \
-	  --allow-program tail --allow-program head --allow-program nl,(checks-hold #t))
-	@$(call check-scheme,tests/proven-check.scm --lib lib --allow-process \
-	  --allow-program sh --allow-program grep --allow-program head,(checks-hold #t))
-	@$(call check-scheme,tests/synthesis-check.scm --lib lib,(checks-hold #t))
-	@$(call check-scheme,tests/replay-check.scm --lib lib --allow-process \
-	  --allow-program grep --allow-program head --allow-program sh --allow-program bash \
-	  --allow-program cat,(gate-holds #t))
 
 # The full gate: warning-clean optimized build, sanitizers, fuzzing, benchmarks,
 # and the loop.
@@ -146,38 +135,6 @@ install-test: toolscheme
 
 package: toolscheme
 	python3 scripts/package.py
-
-# The live synthesis call against the NVIDIA inference gateway, which speaks the
-# Anthropic Messages API natively on /v1/messages.
-#
-# The credential is resolved here and handed over as an environment variable rather
-# than as a file the interpreter has to reach: the token lives outside the sandbox
-# root, and widening the root to fetch it would trade a real boundary for a
-# convenience. Never a secret in the repo.
-#
-# The replay side runs recorded commands, so the allowlist below is the complete
-# set of programs the gate may execute. It matches replay-safe-programs in
-# lib/analysis.scm, which is what decides a sample is offered at all; a command
-# needing anything else is never replayed and its tool is never published.
-SYNTHESIS_KEY_FILE ?= $(HOME)/Documents/API_KEYS/nvidia-inference.txt
-# The nested schema is the default because only it records the working directory
-# each command ran in, and a recorded command cannot be replayed without that.
-TRANSCRIPTS ?= .claude/projects
-# Optional: PATTERN='grep -n' points the loop at one opportunity instead of the
-# highest ranked one.
-REPLAY_PROGRAMS = sh grep egrep fgrep head tail cat wc ls find sort uniq cut nl \
-                  basename dirname file stat du df which tr column
-REPLAY_ALLOW = $(foreach p,$(REPLAY_PROGRAMS),--allow-program $(p))
-
-synthesize: toolscheme
-	@key="$${NVIDIA_INFERENCE_API_KEY:-$$(cat '$(SYNTHESIS_KEY_FILE)' 2>/dev/null)}"; \
-	 if [ -z "$$key" ] && [ -z "$$ANTHROPIC_API_KEY" ]; then \
-	   echo "no credential: export NVIDIA_INFERENCE_API_KEY, or put the token in"; \
-	   echo "$(SYNTHESIS_KEY_FILE) (override with SYNTHESIS_KEY_FILE=...)"; \
-	   exit 2; \
-	 fi; \
-	 NVIDIA_INFERENCE_API_KEY="$$key" ./toolscheme tests/synthesize-live.scm '$(TRANSCRIPTS)' $(PATTERN) \
-	   --root "$(HOME)" --lib "$(CURDIR)/lib" --allow-process --allow-program curl $(REPLAY_ALLOW)
 
 # Installing. A hook that only watches one repository can only ever report on that
 # repository, so to observe every session the binary, the library and the hook have
@@ -197,13 +154,11 @@ CLAUDE_CONFIG_DIR ?= $(HOME)/.claude
 CODEX_HOME ?= $(HOME)/.codex
 
 install: toolscheme
-	install -d "$(BINDIR)" "$(SHAREDIR)/lib/tools" "$(SHAREDIR)/hooks"
+	install -d "$(BINDIR)" "$(SHAREDIR)/lib" "$(SHAREDIR)/hooks"
 	install -m 755 toolscheme "$(BINDIR)/toolscheme"
 	install -m 755 scripts/learning.py "$(SHAREDIR)/learning.py"
 	install -m 644 VERSION.txt "$(SHAREDIR)/VERSION.txt"
 	install -m 644 lib/*.scm "$(SHAREDIR)/lib/"
-	@if ls lib/tools/*.scm >/dev/null 2>&1; then \
-	   install -m 644 lib/tools/*.scm "$(SHAREDIR)/lib/tools/"; fi
 	install -m 644 hooks/*.scm "$(SHAREDIR)/hooks/"
 	install -m 755 hooks/*.sh "$(SHAREDIR)/hooks/"
 	@if [ -f "$(DUCKDB_DIR)/libduckdb.so" ]; then \

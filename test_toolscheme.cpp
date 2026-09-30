@@ -1431,31 +1431,6 @@ static void milestone_1_telemetry(Interpreter& vm) {
                "m1 telemetry rejects unknown actions");
 }
 
-static void milestone_1_published_tools(Interpreter& vm) {
-    vm.eval("(define-tool (list (list 'name \"m1-double\")"
-            "                   (list 'description \"doubles a number\")"
-            "                   (list 'parameters '((n integer)))"
-            "                   (list 'provenance '((pattern \"expr * 2\") (calls 12)))"
-            "                   (list 'procedure (lambda (n) (list (list 'doubled (* 2 n)))))))");
-    equal(vm, "(tool-invoke \"m1-double\" 21)", "((doubled 42))", "m1 a published tool is callable");
-
-    // The manifest describes what an agent may call. A procedure has no written
-    // form, so publishing must not put one in the manifest.
-    const std::string manifest = vm.write(vm.eval("(tool-manifest)"));
-    check(manifest.find("m1-double") != std::string::npos, "m1 the manifest lists the tool");
-    check(manifest.find("#<") == std::string::npos,
-          "m1 the manifest carries no unreadable procedure");
-    check(vm.write(vm.read(manifest)) == manifest, "m1 the manifest round trips");
-    check(manifest.find("(pattern \"expr * 2\")") != std::string::npos,
-          "m1 provenance travels with the tool");
-
-    error_code(vm, "(tool-invoke \"no-such-tool\")", "not-found",
-               "m1 invoking an unknown tool is a structured error");
-    error_code(vm, "(define-tool '((name \"no-body\")))", "invalid-argument",
-               "m1 a tool without a procedure is refused");
-    error_code(vm, "(define-tool (list (list 'procedure (lambda (x) x))))", "invalid-argument",
-               "m1 a tool without a name is refused");
-}
 
 static void milestone_2_wait_for(Interpreter& vm) {
     // Why this exists: across 30 Codex sessions 17.7% of all tool time went to
@@ -1682,7 +1657,6 @@ int main() {
     content_cache(vm);
     milestone_1_platform_facts(vm);
     milestone_1_telemetry(vm);
-    milestone_1_published_tools(vm);
     milestone_2_wait_for(vm);
     milestone_2_process_expect(vm);
     registry_completeness(vm);

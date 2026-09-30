@@ -58,7 +58,11 @@ with tempfile.TemporaryDirectory(prefix="toolscheme install ") as tmp:
         assert call("-e", "(+ 20 22)").strip() == "42"
         assert call("--version").strip() == "toolscheme " + (root / "VERSION.txt").read_text().strip()
     response = json.loads(call("mcp", data=json.dumps(dict(jsonrpc="2.0", id=1, method="tools/list")) + "\n"))
-    assert any(t["name"] == "search-read" for t in response["result"]["tools"]), response
+    # Only `toolscheme_eval` is served since the substitution stack was removed:
+    # the published tools it used to advertise could not beat the commands they
+    # replaced. What matters here is that a relocated install still answers the
+    # handshake and offers the one tool that remains.
+    assert [t["name"] for t in response["result"]["tools"]] == ["toolscheme_eval"], response
     assert "durable" in call("learn", "--help") or "Git" in call("learn", "--help")
     hook = relocated / "share/toolscheme/hooks/observe.sh"
     event = dict(hook_event_name="PreToolUse", tool_name="Bash", tool_input=dict(command="echo hello"), session_id="install", tool_use_id="1")

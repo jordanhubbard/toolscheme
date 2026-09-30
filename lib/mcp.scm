@@ -29,33 +29,6 @@
   (list (list "content" (list (list (list "type" "text") (list "text" text))))
         (list "isError" #t)))
 
-;; A tool's declared parameters become a JSON Schema. Parameters are
-;; ((name type description required?) ...), which is enough for an agent to call
-;; correctly without inventing a schema language.
-;;
-;; Names and types arrive as symbols because that is how they read in Scheme, and
-;; they must go out as strings: json-write renders a list with symbol keys as an
-;; array of pairs, which is a syntactically valid document and a meaningless
-;; schema. A client would quietly ignore it rather than report anything.
-(define (json-key value)
-  (cond ((string? value) value)
-        ((symbol? value) (symbol->string value))
-        (else (write-to-string value))))
-
-(define (mcp-parameter-schema parameters)
-  (list (list "type" "object")
-        (list "properties"
-              (map (lambda (parameter)
-                     (list (json-key (car parameter))
-                           (list (list "type" (json-key (cadr parameter)))
-                                 (list "description" (caddr parameter)))))
-                   parameters))
-        (list "required"
-              (map (lambda (parameter) (json-key (car parameter)))
-                   (filter (lambda (parameter)
-                             (and (> (length parameter) 3) (list-ref parameter 4)))
-                           parameters)))))
-
 (define (mcp-builtin-tools)
   (list
     (list (list "name" "toolscheme_eval")
@@ -73,14 +46,14 @@
                                               (list "description" "The expression to evaluate.")))))
                       (list "required" (list "expression")))))))
 
-(define (mcp-published-tools)
-  (map (lambda (tool)
-         (list (list "name" (field-ref tool 'name))
-               (list "description" (field-ref tool 'description ""))
-               (list "inputSchema" (mcp-parameter-schema (field-ref tool 'parameters '())))))
-       (field-ref (tool-manifest) 'tools)))
-
-(define (mcp-tools) (append (mcp-builtin-tools) (mcp-published-tools)))
+;; Only `toolscheme_eval` is served. The published tools that used to appear here
+;; were removed with the substitution stack: measured against the corpus they had
+;; no axis left to win on, because a shell call is a program in a language while
+;; a tool call is one operation, and 44% of real calls compose more than one
+;; program. `toolscheme_eval` is the exception -- it takes composed work in a
+;; single call, which is the only shape that could compete. Whether an agent ever
+;; reaches for it is a separate question, and an open one.
+(define (mcp-tools) (mcp-builtin-tools))
 
 (define (mcp-call name arguments)
   (if (string=? name "toolscheme_eval")
@@ -92,13 +65,7 @@
               (if (error? outcome)
                   (mcp-failure-content (field-ref outcome 'error))
                   (mcp-content (write-to-string (field-ref outcome 'value)))))))
-      ;; A raised error and a returned error record are both failures, and the
-      ;; client should see them as one: `isError`, not a success block whose text
-      ;; happens to describe a failure.
-      (let ((outcome (catch-errors (lambda () (tool-invoke name arguments)))))
-        (if (error? outcome)
-            (mcp-failure-content (write-to-string outcome))
-            (mcp-content (write-to-string outcome))))))
+      (mcp-failure-content (string-append "unknown tool: " name))))
 
 (define (mcp-handle line)
   (let ((parsed (json-parse line)))

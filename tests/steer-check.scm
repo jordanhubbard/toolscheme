@@ -88,16 +88,12 @@
 
 ;; Codex rejects `permissionDecision: allow` unless a rewrite accompanies it, so
 ;; advice alone must not carry one -- it would turn a note into a permission grant.
+;; The companion case -- advice carried alongside a rewrite, which had to keep
+;; the rewrite's permission -- went with the rewrite path itself. Advice is now
+;; the only thing that can be combined with nothing, so the remaining question is
+;; just that it grants no permission of its own.
 (define advice-only (advice-only-decision "hello"))
 (define advice-fields (field-ref advice-only "hookSpecificOutput"))
-(define combined
-  (decision-with-advice
-    (list (list "hookSpecificOutput"
-                (list (list "hookEventName" "PreToolUse")
-                      (list "permissionDecision" "allow")
-                      (list "updatedInput" (list (list "command" "x"))))))
-    "note"))
-(define combined-fields (field-ref combined "hookSpecificOutput"))
 
 ;; Settings have to hold however the agent was started, so an environment variable
 ;; is not enough: a session begun from a desktop launcher inherits nothing from a
@@ -144,8 +140,6 @@
         (list 'silent-on-different-argument (not no-repeat))
         (list 'advice-carries-no-permission
               (absent? (field-ref advice-fields "permissionDecision" #f)))
-        (list 'rewrite-keeps-its-permission
-              (equal? (field-ref combined-fields "permissionDecision" "") "allow"))
         (list 'disabled-by-default (not (steer-enabled?)))))
 
 (list (list 'checks checks)
@@ -173,6 +167,4 @@
                  (not no-repeat)
                  (not (string=? key-a key-b))
                  (absent? (field-ref advice-fields "permissionDecision" #f))
-                 (equal? (field-ref combined-fields "permissionDecision" "") "allow")
-                 (string-contains? (field-ref combined-fields "additionalContext" "") "note")
                  (not (steer-enabled?)))))

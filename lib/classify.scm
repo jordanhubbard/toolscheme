@@ -63,7 +63,7 @@
             (list (list 'header "authorization")
                   (list 'value (string-append "Bearer " key)))
             (list (list 'header "content-type") (list 'value "application/json"))))
-      (synthesis-credential)))
+      (llm-credential)))
 
 ;; A hook that hangs breaks the session it is meant to help, so the budget is
 ;; well inside the handler timeout and a miss falls back rather than failing.

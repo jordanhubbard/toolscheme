@@ -19,8 +19,12 @@
           ((equal? (field-ref (car rest) "name" "") name) (car rest))
           (else (loop (cdr rest))))))
 
-(define published (tool-named "search-read"))
-(define schema (field-ref published "inputSchema" '()))
+;; Only `toolscheme_eval` is served now. The published tools went with the
+;; substitution stack; what is left is the one shape that takes composed work in
+;; a single call, which is the only shape that could compete with a shell. See
+;; docs/relevance.md.
+(define builtin (tool-named "toolscheme_eval"))
+(define schema (field-ref builtin "inputSchema" '()))
 (define properties (field-ref schema "properties" '()))
 
 ;; An object's fields are (key value) pairs with string keys; an array of pairs
@@ -46,7 +50,7 @@
 (define checks
   (list (list 'protocol-version (field-ref initialize "protocolVersion" ""))
         (list 'lists-builtin (not (null? (tool-named "toolscheme_eval"))))
-        (list 'lists-published (not (null? published)))
+        (list (quote serves-only-the-builtin) (= (length tools) 1))
         (list 'schema-properties-is-object (json-object? properties))
         (list 'schema-required (field-ref schema "required" '()))
         (list 'eval-works (string-contains? (field-ref (car (field-ref eval-call "content" '()))
@@ -63,9 +67,9 @@
       (list 'checks-hold
             (and (equal? (field-ref initialize "protocolVersion" "") mcp-protocol-version)
                  (not (null? (tool-named "toolscheme_eval")))
-                 (not (null? published))
+                 (= (length tools) 1)
                  (json-object? properties)
-                 (member "pattern" (field-ref schema "required" '()))
+                 (member "expression" (field-ref schema "required" (quote ())))
                  (field-ref failing-call "isError" #f)
                  (= (field-ref (field-ref unknown-method "error" '()) "code" 0) -32601)
                  (= (field-ref (field-ref malformed "error" '()) "code" 0) -32700)

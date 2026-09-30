@@ -1091,8 +1091,6 @@ struct Interpreter::Impl {
     bool telemetry = false;
     std::vector<CallRecord> calls;
 
-    std::map<std::string, Value> tools;
-
     explicit Impl(Interpreter* value) : owner(value) { track(global); }
 
     // A top-level `(define (f) ...)` stores a closure in the global environment,
@@ -1641,36 +1639,6 @@ Value Interpreter::telemetry_summary() const {
     return ok_result({field("tools", Value::list(std::move(rows))),
                       field("recorded", static_cast<std::int64_t>(impl_->calls.size())),
                       field("enabled", impl_->telemetry)});
-}
-
-void Interpreter::publish_tool(std::string_view name, Value definition) {
-    impl_->tools[std::string(name)] = std::move(definition);
-}
-
-Value Interpreter::tool_definition(std::string_view name) const {
-    const auto found = impl_->tools.find(std::string(name));
-    return found == impl_->tools.end() ? Value::boolean(false) : found->second;
-}
-
-// The manifest omits the procedure itself: it describes what an agent may call,
-// and a procedure has no transferable written form.
-Value Interpreter::tool_manifest() const {
-    std::vector<Value> rows;
-    for (const auto& entry : impl_->tools) {
-        ListBuilder row(11);
-        // `shapes` and `proven` are data, not procedures, and they are the whole
-        // basis on which a caller may substitute this tool for a command: what it
-        // claims to replace, and the replay evidence behind the claim.
-        for (const char* key : {"name", "description", "parameters", "provenance",
-                                "stability", "shapes", "proven", "translate",
-                                "legacy-form", "empty-status", "cases"}) {
-            const Value value = option(entry.second, key);
-            if (value.type() != Value::Type::Unspecified) row.field(key, value);
-        }
-        rows.push_back(row.build());
-    }
-    const std::int64_t count = static_cast<std::int64_t>(rows.size());
-    return ok_result({field("tools", Value::list(std::move(rows))), field("count", count)});
 }
 
 std::size_t Interpreter::live_environments() const {
@@ -6289,34 +6257,11 @@ void register_shell_parsing(Interpreter& interpreter) {
         return vm.telemetry_summary();
     });
 
-    // A published tool is an ordinary Scheme procedure plus the metadata an agent
-    // needs to discover and call it, and the provenance that says why it exists.
-    interpreter.define_native("define-tool", [](Interpreter& vm, const std::vector<Value>& a) {
-        arity(a, 1, "define-tool");
-        const Value name = option(a[0], "name");
-        const Value procedure = option(a[0], "procedure");
-        if (name.type() != Value::Type::String)
-            return error_result("a tool needs a name", "invalid-argument", "define-tool");
-        if (procedure.type() != Value::Type::Procedure)
-            return error_result("a tool needs a procedure", "invalid-argument", "define-tool");
-        vm.publish_tool(name.as_string(), a[0]);
-        return ok_result({field("name", name), field("published", true)});
-    });
-    interpreter.define_native("tool-manifest", [](Interpreter& vm, const std::vector<Value>& a) {
-        arity(a, 0, "tool-manifest");
-        return vm.tool_manifest();
-    });
-    interpreter.define_native("tool-invoke", [](Interpreter& vm, const std::vector<Value>& a) {
-        arity_between(a, 1, 2, "tool-invoke");
-        const Value definition = vm.tool_definition(want_string(a[0], "tool-invoke"));
-        if (!definition.is_list() || definition.is_nil())
-            return error_result("no such tool: " + std::string(want_string(a[0], "tool-invoke")),
-                                "not-found", "tool-invoke");
-        const Value procedure = option(definition, "procedure");
-        if (procedure.type() != Value::Type::Procedure)
-            return error_result("tool has no procedure", "invalid-argument", "tool-invoke");
-        return vm.apply(procedure, {a.size() == 2 ? a[1] : Value::nil()});
-    });
+    // `define-tool`, `tool-manifest` and `tool-invoke` were here: a registry of
+    // Scheme procedures published with provenance, so a proven tool could be
+    // substituted for the command it replaced. Removed in 0.5.0 with the rest of
+    // the substitution stack -- measured against 22,006 recorded calls, a
+    // substitution has no axis left to win on. See docs/relevance.md.
 
     // What the host can actually do, so a generated tool can branch on it rather
     // than guessing from the platform name.
