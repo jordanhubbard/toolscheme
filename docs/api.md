@@ -250,23 +250,21 @@ environment variable only reaches a hook if the agent inherited it. `NAME=value`
 per line, `#` for comments, `0` or `false` to disable. The environment wins when
 both answer.
 
-## Published tools
+## Published tools (removed in 0.5.0)
 
-A published tool is an ordinary Scheme procedure plus the metadata an agent needs
-to discover it and the provenance that says why it exists.
+`define-tool`, `tool-manifest` and `tool-invoke` registered a Scheme procedure
+with the metadata an agent needed to discover it and the provenance saying why it
+existed. They are gone, with the rest of the substitution stack.
 
-```scheme
-(define-tool (list (list 'name "search-read")
-                   (list 'description "...")
-                   (list 'parameters '((pattern string "...") ...))
-                   (list 'stability "...")
-                   (list 'provenance '((pattern "grep -> read") (observed-pairs 192)))
-                   (list 'procedure search-read)))
-```
+The registry existed so a proven tool could stand in for the command it replaced.
+Measured against 22,006 recorded calls, it cannot: the gate required byte-identity,
+which makes the byte count equal by construction and leaves only latency, where a
+fresh interpreter loses to `fork`; and 44.2% of real shell calls compose more than
+one program, which a per-operation tool cannot match. `docs/relevance.md` has the
+measurements.
 
-`(tool-manifest)` lists them and `(tool-invoke name arguments)` calls one. The
-manifest deliberately omits the procedure: it describes what may be called, and a
-procedure has no transferable written form.
+`toolscheme mcp` still serves `toolscheme_eval`, which takes composed work in a
+single call and is the one shape that could compete.
 
 Tools live in `lib/tools/*.scm`, are loaded at startup, and are exported over MCP
 alongside a generic `toolscheme_eval`. Publishing is writing a file, so reverting

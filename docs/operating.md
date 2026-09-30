@@ -40,7 +40,7 @@ is how every capability-backed primitive here behaves when nothing backs it.
 toolscheme -e '(+ 20 22)'              # evaluate and print
 toolscheme script.scm [args]           # run a script; its value is its output
 toolscheme repl                        # interactive
-toolscheme mcp                         # stdio MCP server: published tools + toolscheme_eval
+toolscheme mcp                         # stdio MCP server: toolscheme_eval + toolscheme_eval
 toolscheme analyze <dir>               # rank tool-use opportunities from logs
 ```
 
@@ -118,7 +118,7 @@ is why a Claude Code session and a Codex session appear side by side in the same
 report. Hosts configured with the same learning Git remote share session summaries
 and steering notes through periodic synchronization; raw observations remain local.
 
-**MCP is the other direction.** `toolscheme mcp` serves published tools *to* an
+**MCP is the other direction.** `toolscheme mcp` serves `toolscheme_eval` *to* an
 agent; it is not how observations are collected.
 
 See [Durable learning with Git](learning.md) for configuration. Capture stays a local

@@ -5,9 +5,20 @@ favors native byte strings and immutable random-access array lists over standard
 certification, and every tool result is structured, canonical, evaluable data
 rather than text to be scraped.
 
-Its purpose is to close a loop: watch what an agent actually calls, measure what it
-costs, write a better tool, prove it by replay, and publish it back over MCP. See
-`docs/roadmap/self-improvement.md`.
+Its purpose was to close a loop: watch what an agent actually calls, measure what
+it costs, write a better tool, prove it by replay, and publish it back over MCP.
+That was tested against 22,006 recorded calls and 31MB of tool output, and the
+second half of it does not hold -- a substitution has no axis left to win on,
+because byte-identity makes the byte count equal by construction and a shell call
+composes where a tool call does not. The whole substitution stack was removed in
+0.5.0. The argument, with the measurements, is in `docs/relevance.md`.
+
+What it is now is an instrument that can also enforce policy: it records what
+agents call, it answers questions about that corpus in a language that is already
+there, and it refuses a few specific wastes. The refusal is the part with
+evidence behind it -- fixed waits of ten seconds or more went from 32 to 2 while
+short polling stayed untouched, after an instruction in `AGENTS.md` and hook
+advice had both failed to move that number at all.
 
 ## Build And Test
 
@@ -16,7 +27,7 @@ make test        # 1650 checks, warning-clean at -O3
 make sanitize    # the same suite under AddressSanitizer + UndefinedBehaviorSanitizer
 make fuzz        # deterministic property fuzzer (seeded; reproduces from its seed)
 make bench       # benchmarks with enforced performance targets
-make loop        # log intake, tool library, MCP, synthesis, and the publication gate
+make loop        # log intake, the hook's decisions, the refusals, MCP
 make check       # all of the above
 ```
 
@@ -97,47 +108,39 @@ exits 0 whatever happens -- a hook that breaks the session it is measuring is
 worse than no measurement. It does nothing at all until `make toolscheme` has been
 run. Cost is about 2.5 ms per event.
 
-### Rewriting a call
+### Refusing a call
 
-A `PreToolUse` hook may also return `updatedInput`, replacing the tool input before
-it runs, so a shell command becomes a toolscheme call with nothing for the model to
-learn. Exactly one rule governs it:
-
-> A command shape is rewritten only if a published tool claims that shape **and**
-> carries replay evidence of reproducing it exactly -- same bytes, same exit
-> status -- **and** of being faster.
-
-`TOOLSCHEME_REDIRECT=1` switches it on. Today it rewrites nothing, because no tool
-has earned a claim: reproducing a command byte for byte leaves speed as the only
-axis to win on, and `search-read` standing in for `grep -n … | head -20` is
-correct and *slower* -- 27 ms against grep's 11 ms. `make loop` recomputes that
-every run and fails the build if a tool claims more than its cases establish.
-
-## The loop
+A `PreToolUse` hook may also decline one, and that is the mechanism with evidence
+behind it. Advice was measured twice and read past both times; a denial cannot be.
 
 ```sh
-toolscheme analyze ~/.claude/transcripts        # what is worth replacing, and why
-make loop                                       # prove a candidate before publishing
-make synthesize                                 # let a model write the next one
+TOOLSCHEME_REFUSE_SLEEP=1     # decline a fixed wait of ten seconds or more
+TOOLSCHEME_DOGFOOD=<paths>    # inside named trees, decline what this replaces
 ```
 
-Analysis of 158 transcripts — 14,129 events, 7,097 tool calls — runs in about three
-seconds and reports hot tools, shell-AST command shapes, repeat rate, output cost,
-and consecutive-call pairs as fusion candidates.
+Fixed waits at or over the threshold went from 32 to 2 after the first of those,
+while short polling -- which the rule deliberately leaves alone -- stayed at 15.
+Every refusal names the equivalent to use instead. `docs/agents.md` has the
+detail.
 
-A candidate is published only if it agrees with the tool it replaces on every
-replayed case *and* wins on bytes, latency, or stability. A deliberately lossy
-candidate that is both stabler and cheaper is refused, with the disagreeing line as
-evidence — winning on cost never substitutes for agreeing on the answer.
+A hook may also *rewrite* a call by returning `updatedInput`, and until 0.5.0
+this one did, whenever a published tool carried replay evidence of reproducing a
+command exactly. That is removed. The gate demanded byte-identity, which is
+correct -- an agent cannot see a rewrite, so it must not be able to tell -- but it
+makes the byte count equal by construction and leaves only latency, where a fresh
+interpreter loses to `fork`. See `docs/relevance.md`.
 
-`make synthesize` needs a credential: `NVIDIA_INFERENCE_API_KEY` for the NVIDIA
-inference gateway, or `ANTHROPIC_API_KEY` to talk to Anthropic directly. The gate
-only ever replays commands whose every program reads and reports — a corpus is full
-of commands that must never be re-run.
+## What the analysis is for
 
-Published tools live in `lib/tools/*.scm` with a provenance header naming the
-pattern that motivated them and what the replay measured. Publishing is writing a
-file; reverting is deleting one.
+```sh
+toolscheme analyze ~/.claude/projects           # what agents actually call, and what it costs
+```
+
+Analysis reports hot tools, shell-AST command shapes, repeat rate, output cost,
+and consecutive-call pairs. It runs over the hook's own log as readily as over a
+transcript directory, and ad-hoc questions are ordinary Scheme against the same
+data -- which is how every figure in `docs/relevance.md` was produced, including
+the ones that refuted this project's original charter.
 
 ## Embedding
 

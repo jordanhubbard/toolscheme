@@ -486,8 +486,10 @@ rather than by editing configuration files, because both ship one and
 hand-editing someone's primary tool's config is how it gets corrupted. The
 targets remove before adding, so they are idempotent.
 
-Four tools are exposed: `toolscheme_eval`, and `read_line_range`,
-`read_text_bounded` and `search-read` from the published library.
+One tool is exposed: `toolscheme_eval`. The published tools that used to sit
+beside it went with the substitution stack in 0.5.0 -- they could not beat the
+commands they replaced. `toolscheme_eval` remains because it takes composed work
+in a single call, which is the only shape that could compete with a shell.
 
 The server is sandboxed to the directory the agent starts it in, which is the
 project the agent is working on -- so it can read what the agent could already
