@@ -20,8 +20,26 @@ endif
 # not exist, which is exactly how every other capability-backed primitive behaves.
 #
 #   make vendor-duckdb     fetch the C library into vendor/ (about 38 MB)
+#
+# Detection is a link, not a header. `make vendor-duckdb` fetches a prebuilt
+# shared object for one platform, and a header says nothing about whether that
+# object can be linked here: building in an Alpine container against a vendored
+# glibc build fails with `undefined reference to vtable for std::runtime_error`
+# rather than falling back to no DuckDB, which is the behaviour this project
+# promises. So the probe compiles and links a trivial program against it, and a
+# library that cannot be used is treated exactly like one that is not there.
 DUCKDB_DIR ?= vendor/duckdb
 ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
+  # The probe has to *call* something, or it links vacuously: a `main` that
+  # references no DuckDB symbol succeeds against a library the real build cannot
+  # use, which is exactly what the first version of this did.
+  DUCKDB_USABLE := $(shell printf '#include "duckdb.h"\nint main(void){return duckdb_library_version()==0;}\n' \
+        > .duckdb-probe.cpp 2>/dev/null && \
+      $(CXX) -std=c++17 .duckdb-probe.cpp -I$(DUCKDB_DIR) -L$(DUCKDB_DIR) -lduckdb \
+        -o .duckdb-probe.out >/dev/null 2>&1 && echo yes; \
+      rm -f .duckdb-probe.cpp .duckdb-probe.out)
+endif
+ifeq ($(DUCKDB_USABLE),yes)
   DUCKDB_FLAGS = -DTOOLSCHEME_DUCKDB -I$(DUCKDB_DIR)
   DUCKDB_SOURCES = toolscheme_duckdb.cpp
   # Two rpaths: the checkout for a development build, and a location relative to
