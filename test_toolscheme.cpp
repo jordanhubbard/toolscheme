@@ -1342,19 +1342,35 @@ static void milestone_1_shell_parse(Interpreter& vm) {
 
 static void content_cache(Interpreter& vm) {
     // A cache that can serve a stale byte is worse than no cache, so what is
-    // checked here is invalidation, not speed. The fingerprint is device,
-    // inode, size and mtime to the nanosecond; a same-length rewrite changes
-    // only the last of those and is the case a size check alone would miss.
+    // checked here is invalidation, not speed.
+    //
+    // The fingerprint is device, inode, size and mtime. A same-length rewrite
+    // changes only the last of those -- and the comment that used to sit here
+    // said "to the nanosecond", which was the mistake. A filesystem stamps mtime
+    // from a tick-granular clock, so two writes inside one tick are genuinely
+    // identical in all four fields. Rewriting a 6-byte file and reading it back
+    // returned the old contents on x86_64; it passed on arm64 only because that
+    // machine was slow enough to cross a tick. So the cache also refuses to serve
+    // a file whose timestamp is too recent to be trusted, and a file must be aged
+    // before the hit path can be reached at all.
     vm.eval("(write-file \"cache-probe.txt\" \"one\\n\")");
-    // Admitted on the second sight, not the first: over the recorded corpus,
-    // 894 of 2,089 reads were of files never read again, and copying those in
-    // made the replay three times slower than no cache at all. So the first two
-    // reads miss -- the second is what admits it -- and the third hits.
     check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy() == false,
+          "m2 a just-written file is never served from the cache");
+
+    // Aged past the settle window, the ordinary admission rule applies. Admitted
+    // on the second sight, not the first: over the recorded corpus, 894 of 2,089
+    // reads were of files never read again, and copying those in made the replay
+    // three times slower than no cache at all.
+    //
+    // A file of its own, because the read above already spent this path's first
+    // sight and the admission sequence is what is being counted.
+    vm.eval("(write-file \"cache-aged.txt\" \"one\\n\")");
+    vm.eval("(touch \"cache-aged.txt\" '((age-seconds 30)))");
+    check(vm.eval("(field-ref (read-file \"cache-aged.txt\" '((volatile #t))) 'cached)").truthy() == false,
           "m2 a first read is not cached");
-    check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy() == false,
+    check(vm.eval("(field-ref (read-file \"cache-aged.txt\" '((volatile #t))) 'cached)").truthy() == false,
           "m2 a second read admits but does not yet serve");
-    check(vm.eval("(field-ref (read-file \"cache-probe.txt\" '((volatile #t))) 'cached)").truthy(),
+    check(vm.eval("(field-ref (read-file \"cache-aged.txt\" '((volatile #t))) 'cached)").truthy(),
           "m2 a third read is served from the cache");
     // The property the whole thing rests on.
     vm.eval("(write-file \"cache-probe.txt\" \"two\\n\")");

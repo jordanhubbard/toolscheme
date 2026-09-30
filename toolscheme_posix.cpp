@@ -679,11 +679,42 @@ private:
         cache_[key] = std::move(entry);
     }
 
+    // A file whose timestamp is too recent to be trusted must be read, not
+    // recalled.
+    //
+    // The fingerprint is device, inode, size and mtime, and none of those change
+    // when a file is overwritten with different bytes of the same length inside
+    // one filesystem timestamp tick. ext4 stamps mtime from a tick-granular
+    // clock, so two writes a few hundred microseconds apart are genuinely
+    // indistinguishable -- and `read-file` then returns the previous contents.
+    //
+    // This is not hypothetical and it is not a test artifact. Rewriting a 6-byte
+    // file from "alpha" to "BRAVO" and reading it back returned "alpha" on
+    // x86_64. It passed on arm64 only because that machine was slow enough to
+    // cross a tick between the write and the read, which is why six checks went
+    // green on one architecture and red on another for a year.
+    //
+    // The remedy is the one rsync and make use: distrust a timestamp close to
+    // now. Two seconds is well clear of any granularity in practice, and costs
+    // only that a file just written is read again rather than recalled -- which
+    // is the rare case in a corpus where agents mostly read what they did not
+    // just write.
+    static constexpr std::int64_t cache_settle_ns = 2000000000;
+
+    bool too_recent(const Fingerprint& print) const {
+        struct timespec now {};
+        if (::clock_gettime(CLOCK_REALTIME, &now) != 0) return true;
+        const std::int64_t wall =
+            static_cast<std::int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
+        return print.modified_ns > wall - cache_settle_ns;
+    }
+
     bool cache_lookup(const std::string& key, const Fingerprint& print, std::size_t limit,
                       std::string& content, bool& truncated) {
         auto found = cache_.find(key);
         if (found == cache_.end()) return false;
         if (!(found->second.fingerprint == print)) return false;
+        if (too_recent(print)) return false;
         // A smaller limit than the cached read would have to re-truncate; a
         // larger one may need bytes that were never read. Only an identical
         // bound is safe to reuse.
@@ -885,7 +916,27 @@ private:
         const int descriptor = ::open(resolved.path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
         if (descriptor < 0) return errno_error("touch", errno, path);
         ::close(descriptor);
-        if (::utimes(resolved.path.c_str(), nullptr) != 0) return errno_error("touch", errno, path);
+        // `(age-seconds N)` stamps the file N seconds in the past instead of now.
+        // The content cache refuses to serve a file whose timestamp is too recent
+        // to be trusted, because a filesystem's timestamp granularity is coarser
+        // than a write is quick -- so without a way to age a file, the cache's hit
+        // path cannot be tested at all except by sleeping through the window.
+        const Value options = options_at(arguments, 1);
+        const std::int64_t age = number_option(options, "age-seconds", 0);
+        if (age < 0) return error_result("age-seconds must not be negative",
+                                         "invalid-argument", "touch");
+        if (age == 0) {
+            if (::utimes(resolved.path.c_str(), nullptr) != 0)
+                return errno_error("touch", errno, path);
+        } else {
+            struct timeval when[2] {};
+            if (::gettimeofday(&when[0], nullptr) != 0)
+                return errno_error("touch", errno, path);
+            when[0].tv_sec -= static_cast<time_t>(age);
+            when[1] = when[0];
+            if (::utimes(resolved.path.c_str(), when) != 0)
+                return errno_error("touch", errno, path);
+        }
         return ok_result({field("path", relative(resolved.path)), field("touched", true)});
     }
 
