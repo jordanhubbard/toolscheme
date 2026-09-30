@@ -130,6 +130,58 @@ primitives. A tool layer that cannot beat `sed` still measured, precisely, that
 it cannot beat `sed` -- and named the structural reason. That is worth having,
 and it is worth having *because* it is willing to return this answer.
 
+## Does it pay its way?
+
+Relevance and economics are different questions. The first asks whether the tools
+are better; the second asks whether the whole apparatus returns more than it
+costs. Both are measurable here.
+
+The hook is a tax on every tool call. `PreToolUse` must block, because it can
+refuse; `PostToolUse` follows. Measured against a 22MB log, each costs 16-17ms
+and neither grows with the log. Across the corpus that is 32,069 hook
+invocations, or **23ms per tool call**.
+
+The refusal is the only mechanism with a measured saving. Normalised per call,
+so the two windows are comparable:
+
+| | ms per call |
+|---|---:|
+| time in fixed waits before the refusal | 69 |
+| time in fixed waits after | 11 |
+| **saved** | **58** |
+| **hook cost** | **23** |
+| **net** | **35 saved** |
+
+So the runtime ledger is positive, by about 2.5 to 1. Over the 9,141 calls since
+the refusal was enabled that is roughly 530 seconds saved against 210 spent --
+call it five minutes, over four days.
+
+That is a thin margin, and it is worth saying plainly that it took a defect fix
+to get there. Until this was measured, `continue-decision` computed its stall
+signals before checking whether continuation was enabled, so every turn end paid
+an HTTPS round trip -- 800ms, against 15ms once the check moved -- for a decision
+that had already been made. Nothing in the test suite could see it, because the
+tests call the decision directly and were right about what it returned.
+
+Against that sits the code, sized by what the evidence says of it:
+
+| | lines |
+|---|---:|
+| pays (observation, analysis, refusals) | 1,460 |
+| unproven (continuation, classification) | 847 |
+| disproven (substitution, replay, synthesis, MCP, tools) | 1,661 |
+| the interpreter all of it runs on | 10,449 |
+
+The part that pays is a tenth of the C++ it needs. A shell script in a
+`PreToolUse` hook could refuse `sleep 40` in fifty lines -- though not reliably:
+44% of calls compose more than one program, and a `sleep` behind `&&` is
+invisible without a real tokenizer. The parser earns its place. The other 322
+primitives are earning theirs somewhere else.
+
+Where they earn it is analysis. Every figure in this document came from ad-hoc
+queries written against the corpus in a language that was already there. That is
+the case for the interpreter, and it is not the case the charter made.
+
 ## What follows
 
 Neither "delete the project" nor "keep going as planned".
@@ -143,3 +195,33 @@ Neither "delete the project" nor "keep going as planned".
   is where the next one should come from, not from intuition.
 - The honest framing of this project is an instrument that can also enforce
   policy -- not a replacement tool layer that happens to keep logs.
+
+## The recommendation
+
+Feed a smaller one.
+
+Keep the 1,460 lines that pay and the interpreter they run on: observation,
+analysis, and refusals. The refusal is the only mechanism here that changed a
+number two milder attempts could not move, and analysis is what produced every
+finding on this page, including the ones against the project itself.
+
+Delete the 1,661 lines of substitution -- redirect, replay, synthesis, the
+published tools, the MCP serving of them. Not because they are badly built: the
+replay gate is careful, and it correctly published tools whose own headers record
+that they cost more than what they replace. They cannot win, for a reason that is
+structural and now written down, and keeping them costs review attention on every
+change and has already produced one incident.
+
+Park continuation rather than deleting it. The Codex path works and is
+background; the Claude Code path has fired zero times in 64 turn ends. Give it a
+bounded window -- a fortnight of real use -- and judge it on
+`did-it-work.scm` rather than on how interesting it is.
+
+The honest summary is that the runtime ledger is positive and small, and the
+engineering ledger is not. In a single session this machinery produced a
+431-continuation runaway, an 800ms tax on every turn for a disabled feature, a
+recorder that silently recorded nothing, a tokenizer that swallowed the rest of
+the line after a quoted word, and a cap that reset itself on log rotation. Every
+one was found by measuring rather than by testing. A smaller system has fewer
+places for that to happen, and the part worth keeping is the part that found
+them.
