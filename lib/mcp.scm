@@ -67,6 +67,35 @@
                   (mcp-content (write-to-string (field-ref outcome 'value)))))))
       (mcp-failure-content (string-append "unknown tool: " name))))
 
+;; What a client is told on connect.
+;;
+;; `initialize` carries an `instructions` field that every MCP client reads, and
+;; this server returned the empty string in it -- so an agent that connected was
+;; told nothing about why the server existed or when to reach for it. That is the
+;; one introduction the protocol gives you for free, and it was going unused
+;; while the tools sat unused beside it.
+;;
+;; Deliberately short, and about *when* rather than *what*: the tool list already
+;; says what. Shared learnings, when a snapshot has been published locally, follow
+;; it rather than replacing it -- an empty snapshot used to mean an empty
+;; introduction.
+(define mcp-introduction
+  (string-append
+    "Evaluates toolscheme expressions and returns association lists rather than "
+    "text to be scraped. Identical calls return identical bytes, so repeating one "
+    "costs nothing in a cached prompt prefix.\n\n"
+    "Worth reaching for when a shell command would need parsing afterwards: "
+    "(grep \"needle\" '(glob \"src/**/*.c\") '((limit 20))) answers with paths and "
+    "line numbers already separated. Every text tool takes (limit N), so no "
+    "pipeline terminator is needed.\n\n"
+    "Also (wait-for '(exists \"path\")) and (wait-for '(matches \"log\" \"ready\")), "
+    "which return the moment a condition holds rather than after a fixed delay."))
+
+(define (mcp-instructions)
+  (if (string-null? learning-notes)
+      mcp-introduction
+      (string-append mcp-introduction "\n\nShared learnings (advisory):\n" learning-notes)))
+
 (define (mcp-handle line)
   (let ((parsed (json-parse line)))
     (if (error? parsed)
@@ -84,7 +113,7 @@
                      (list "capabilities" (list (list "tools" (list (list "listChanged" #f)))))
                      (list "serverInfo" (list (list "name" "toolscheme")
                                               (list "version" "0.2.0")))
-                     (list "instructions" learning-notes))))
+                     (list "instructions" (mcp-instructions)))))
             ((string=? method "tools/list")
              (mcp-envelope id (list (list "tools" (mcp-tools)))))
             ((string=? method "tools/call")

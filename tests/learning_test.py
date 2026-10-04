@@ -123,7 +123,13 @@ class LearningTest(unittest.TestCase):
                                 env=dict(os.environ, TOOLSCHEME_STATE=str(self.a)),
                                 input=json.dumps(dict(jsonrpc="2.0", id=1, method="initialize")) + "\n",
                                 capture_output=True, text=True, timeout=5)
-        self.assertEqual(json.loads(result.stdout)["result"]["instructions"], "Wait for observable completion.")
+        # The handshake used to carry the shared-learning snapshot alone, which
+        # meant a server with no snapshot introduced itself as the empty string.
+        # It now leads with what the server is for and appends the snapshot, so
+        # the snapshot must be present rather than be the whole of it.
+        instructions = json.loads(result.stdout)["result"]["instructions"]
+        self.assertIn("Wait for observable completion.", instructions)
+        self.assertIn("toolscheme expressions", instructions)
 
     def test_incremental_complete_lines_and_private_inputs(self):
         event = dict(session="private-session", event="pre", command="sleep 55", cwd="/private/project", input="SECRET", at=1)

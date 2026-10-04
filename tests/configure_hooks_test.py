@@ -28,6 +28,27 @@ class ConfigureHooksTest(unittest.TestCase):
         self.assertEqual(len(config["hooks"]["PreToolUse"]), 2)
         self.assertEqual(module.claude_config(updated, "'/new prefix/share/toolscheme/hooks/observe.sh'"), updated)
 
+    def test_session_start_is_added_without_evicting_another_owner(self):
+        # SessionStart is the one event likely to belong to somebody else: on the
+        # machine this was written for, it already did. Appending has to leave
+        # that hook intact, because Claude Code runs every matching one and
+        # replacing a stranger's hook would be a far worse failure than not
+        # installing ours.
+        original = {"hooks": {"SessionStart": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": "/somebody/elses/hook.sh"}]}]}}
+        updated = json.loads(
+            module.claude_config(json.dumps(original), "/p/share/toolscheme/hooks/observe.sh"))
+        entries = updated["hooks"]["SessionStart"]
+        commands = [hook["command"] for entry in entries for hook in entry["hooks"]]
+        self.assertIn("/somebody/elses/hook.sh", commands)
+        self.assertIn("/p/share/toolscheme/hooks/observe.sh", commands)
+        # And installing twice must not accumulate copies of ours.
+        again = json.loads(
+            module.claude_config(json.dumps(updated), "/p/share/toolscheme/hooks/observe.sh"))
+        repeated = [hook["command"] for entry in again["hooks"]["SessionStart"]
+                    for hook in entry["hooks"]]
+        self.assertEqual(sorted(repeated), sorted(commands))
+
     def test_codex_preserves_comments_and_hooks(self):
         source = '# keep this comment\nmodel = "example"\n[[hooks.PreToolUse]]\nmatcher = "*"\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "custom-hook"\n'
         updated = module.codex_config(source, "'/old path/observe.sh'")

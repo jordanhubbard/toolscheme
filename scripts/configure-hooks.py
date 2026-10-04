@@ -16,7 +16,14 @@ END = "# END toolscheme observation hook"
 def claude_config(source, command):
     config = json.loads(source or "{}")
     hooks = config.setdefault("hooks", {})
-    for event in ("PreToolUse", "PostToolUse"):
+    # SessionStart carries the one note that is cheaper said once than reacted to
+    # on every call: that `toolscheme` is on PATH and waits on conditions. It was
+    # written, tested, and never installed -- the installer wired only the two
+    # tool events, so on a machine where SessionStart belonged to another tool the
+    # advice simply never ran, and the same sentence got hand-written into a
+    # CLAUDE.md instead. Appending rather than replacing is what makes that safe:
+    # Claude Code runs every matching hook, so another owner keeps its own.
+    for event in ("PreToolUse", "PostToolUse", "SessionStart"):
         entries = hooks.setdefault(event, [])
         if not isinstance(entries, list):
             raise ValueError(f"{event} hooks must be an array")
