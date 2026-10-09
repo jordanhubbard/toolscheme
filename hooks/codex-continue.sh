@@ -47,6 +47,34 @@ fi
 TOOLSCHEME_CODEX_SOCKET="${TOOLSCHEME_CODEX_SOCKET:-$STATE/run/codex.sock}"
 export TOOLSCHEME_CODEX_SOCKET
 
+# Find codex wherever it has moved to.
+#
+# A systemd user unit inherits no login shell, so its PATH is whatever the unit
+# file names -- and codex does not stay put. It was an npm global under
+# /usr/bin, then a Homebrew install under /home/linuxbrew/.linuxbrew/bin, and the
+# watcher spent nine attempts reporting "could not start codex" because the
+# directory it had been told about no longer held one. The attempt bound stopped
+# the retrying, and the failure records made it visible, but neither made it
+# work.
+#
+# So the directory is discovered rather than declared. The candidates are the
+# usual install prefixes; PATH is consulted first in case this ran from a shell
+# that already knows.
+for candidate in \
+    "$(command -v codex 2>/dev/null)" \
+    "$HOME/.local/bin/codex" \
+    /home/linuxbrew/.linuxbrew/bin/codex \
+    /opt/homebrew/bin/codex \
+    /usr/local/bin/codex \
+    /usr/bin/codex \
+    /bin/codex
+do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    PATH="$(dirname "$candidate"):$PATH"
+    export PATH
+    break
+done
+
 # Three stages, because there is one filesystem root per run and this needs two:
 # the rollouts, which it reads, and the state directory, which holds the ledger
 # the cap is counted from. Folding them together by widening the root to $HOME

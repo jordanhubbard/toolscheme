@@ -68,6 +68,18 @@
           ;; The watcher must agree with it, since it is the side that connects.
           (string-contains? watcher socket-path)
 
+          ;; And it must find codex wherever codex has gone. A systemd user unit
+          ;; inherits no login shell, so its PATH is whatever the unit names --
+          ;; and codex does not stay put: an npm global under /usr/bin became a
+          ;; Homebrew install under /home/linuxbrew, and the watcher spent nine
+          ;; attempts reporting "could not start codex" against a directory that
+          ;; no longer held one. The attempt bound stopped the retrying and the
+          ;; failure records made it visible; neither made it work. So the
+          ;; directory is discovered, not declared.
+          (string-contains? watcher "command -v codex")
+          (string-contains? watcher "linuxbrew")
+          (string-contains? watcher "/opt/homebrew/bin/codex")
+
           ;; The session wrapper defers rather than duplicating: it names the
           ;; shim and no socket of its own.
           (string-contains? session "codex-shim.sh")
