@@ -24,7 +24,7 @@
   (json-write
     (let ((enabled (codex-enabled?)))
       (list (list "enabled" enabled)
-            (list "socket" (codex-socket))
+            (list "daemon" (codex-daemon-note))
             (list "idle-threshold" (codex-idle-seconds))
             (list "threads-known" (length counts))
             (list "threads" (codex-scan enabled counts)))))

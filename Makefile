@@ -55,7 +55,7 @@ ifeq ($(DUCKDB_USABLE),yes)
                 -Wl,-rpath,'$(DUCKDB_RUNTIME)'
 endif
 
-.PHONY: all test sanitize fuzz bench loop adoption check install uninstall install-mcp uninstall-mcp install-codex-shim uninstall-codex-shim vendor-duckdb FORCE clean learning-test install-test package
+.PHONY: all test sanitize fuzz bench loop adoption check install uninstall install-mcp uninstall-mcp install-codex-continue uninstall-codex-continue vendor-duckdb FORCE clean learning-test install-test package
 all: toolscheme toolscheme_test
 
 # The executable: a scripting front end and an MCP server.
@@ -173,6 +173,15 @@ CODEX_HOME ?= $(HOME)/.codex
 
 install: toolscheme
 	install -d "$(BINDIR)" "$(SHAREDIR)/lib" "$(SHAREDIR)/hooks"
+	@# Clear tools an older install left behind. The registry they call into was
+	@# removed in 0.5.0 but the files were not, and every one of them failed with
+	@# "unbound symbol: define-tool" on every invocation -- silently, since hooks
+	@# discard stderr. Removing a feature means removing what it left on disk.
+	@rm -rf "$(SHAREDIR)/lib/tools"
+	@if [ -d "$(STATEDIR)/tools" ]; then \
+	   rm -rf "$(STATEDIR)/tools"; \
+	   echo "removed adopted tools from an older install; the registry they used is gone"; \
+	 fi
 	install -m 755 toolscheme "$(BINDIR)/toolscheme"
 	install -m 755 scripts/learning.py "$(SHAREDIR)/learning.py"
 	install -m 644 VERSION.txt "$(SHAREDIR)/VERSION.txt"
@@ -195,22 +204,26 @@ install: toolscheme
 	     --claude-dir "$(CLAUDE_CONFIG_DIR)" --codex-dir "$(CODEX_HOME)"; fi
 	@echo "Then: toolscheme analyze $(STATEDIR)"
 
-uninstall: uninstall-codex-shim uninstall-mcp
+uninstall: uninstall-codex-continue uninstall-mcp
 	rm -f "$(BINDIR)/toolscheme"
 	rm -rf "$(SHAREDIR)"
 	@echo "removed the binary and $(SHAREDIR); observations in $(STATEDIR) are left alone"
 
-# Deliberately not part of `install`. Everything else here observes; this one
-# puts a file named `codex` ahead of the real one on someone's PATH, and that is
-# a decision to make on purpose rather than to inherit from a make target. It is
-# a symlink so that a later `make install` updates it, and the shim recognises
-# other copies of itself by content, so linking it as `codex` cannot loop.
-install-codex-shim: install
-	ln -sf "$(SHAREDIR)/hooks/codex-shim.sh" "$(BINDIR)/codex"
-	@# The shim only makes a session reachable; the timer is what reaches it.
-	@# Installing it is safe whatever the setting says -- the watcher exits
-	@# immediately unless TOOLSCHEME_CODEX_CONTINUE is on -- so the setting stays
-	@# the single switch rather than one of two that have to agree.
+# The watcher, which polls for stalled Codex threads and queues a message into
+# them. Deliberately not part of `install`, because it continues an agent that
+# said it had more to do, and that is a decision to make on purpose.
+#
+# This used to install a `codex` shim ahead of the real one on PATH, whose job
+# was to launch every session against an app server toolscheme ran, because
+# `codex queue` could only reach a session started that way. Codex now runs its
+# own shared managed daemon and `codex queue` addresses it by default, so the
+# shim, its socket, its 0700 directory, its `--remote` probe and the PATH
+# ordering it depended on are all gone. Installing the timer is the whole of it.
+#
+# Safe whatever the setting says: the watcher exits immediately unless
+# TOOLSCHEME_CODEX_CONTINUE is on, so the setting stays the single switch rather
+# than one of two that have to agree.
+install-codex-continue: install
 	@if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then \
 	   install -d "$(HOME)/.config/systemd/user"; \
 	   install -m 644 systemd/toolscheme-codex-continue.service systemd/toolscheme-codex-continue.timer \
@@ -222,14 +235,10 @@ install-codex-shim: install
 	 else \
 	   echo "no systemd user session -- run $(SHAREDIR)/hooks/codex-continue.sh from cron or launchd"; \
 	 fi
-	@echo
-	@echo "installed: $(BINDIR)/codex -> $(SHAREDIR)/hooks/codex-shim.sh"
-	@if [ "$$(command -v codex)" = "$(BINDIR)/codex" ]; then \
-	   echo "codex on your PATH is now the shim"; \
-	 else \
-	   echo "warning: $(BINDIR) is not early enough on PATH -- codex still resolves to $$(command -v codex)"; \
-	 fi
-	@echo "it passes through unchanged unless TOOLSCHEME_CODEX_CONTINUE=1 is set"
+	@echo "set TOOLSCHEME_CODEX_CONTINUE=1 to arm it; it does nothing until then"
+	@echo "needs a Codex with the managed app-server daemon (0.162 verified);"
+	@echo "on an older one, queueing fails and the thread is abandoned after"
+	@echo "three times the cap, which is the same path as any delivery failure"
 
 # Serve the published tools to the agents in-process, which is the delivery
 # mechanism this project's own measurements favour. Four separate attempts to
@@ -269,9 +278,7 @@ uninstall-mcp:
 	   codex mcp remove toolscheme >/dev/null 2>&1 || true; fi
 	@echo "unregistered toolscheme from any agent that had it"
 
-uninstall-codex-shim:
-	@if [ -L "$(BINDIR)/codex" ]; then rm -f "$(BINDIR)/codex"; \
-	   echo "removed $(BINDIR)/codex"; fi
+uninstall-codex-continue:
 	@if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then \
 	   systemctl --user disable --now toolscheme-codex-continue.timer >/dev/null 2>&1 || true; \
 	   rm -f "$(HOME)/.config/systemd/user/toolscheme-codex-continue.service" \

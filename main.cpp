@@ -137,52 +137,20 @@ bool load_library(Interpreter& vm, const std::string& directory, std::string& er
     }
     // Published tools are ordinary Scheme files, loaded after the library they use.
     //
-    // Read here rather than through the interpreter's own `glob`, because that
-    // resolves inside the capability root: a tool library installed in
-    // $PREFIX/share is invisible from any sandbox that does not contain it, which
-    // is every workspace except this project's own. Tools silently failed to exist
-    // everywhere they were actually wanted.
-    const std::string tools = directory + "/tools";
-    vm.define("tool-directory", Value::string(tools));
-    std::vector<std::string> published;
-    const auto collect = [&published](const std::string& from) {
-        if (DIR* handle = ::opendir(from.c_str())) {
-            while (struct dirent* entry = ::readdir(handle)) {
-                const std::string name = entry->d_name;
-                if (name.size() > 4 && name.compare(name.size() - 4, 4, ".scm") == 0)
-                    published.push_back(from + "/" + name);
-            }
-            ::closedir(handle);
-        }
-    };
-    collect(tools);
-    // Tools this host has evolved or adopted. They arrive by Git rather than by
-    // install, which is what makes the repository a shared store rather than a
-    // per-machine one -- but only after `learn adopt` puts them here. A tool
-    // another host published sits in the shared area and is not loaded, so
-    // pulling never changes what this machine runs.
-    std::string state;
-    if (const char* p = std::getenv("TOOLSCHEME_STATE")) state = p;
-    else if (const char* p = std::getenv("XDG_STATE_HOME")) state = std::string(p) + "/toolscheme";
-    else if (const char* p = std::getenv("HOME")) state = std::string(p) + "/.local/state/toolscheme";
-    // Defined even when there is no state directory, so Scheme can test it
-    // rather than test for its existence.
-    const std::string adopted = state.empty() ? std::string() : state + "/tools";
-    vm.define("adopted-tool-directory", Value::string(adopted));
-    if (!adopted.empty()) collect(adopted);
-    std::sort(published.begin(), published.end());
-    for (const std::string& path : published) {
-        std::ifstream input(path, std::ios::binary);
-        if (!input) continue;
-        std::ostringstream text;
-        text << input.rdbuf();
-        try {
-            vm.eval(text.str(), path);
-        } catch (const std::exception& failure) {
-            // One broken tool must not take the library with it.
-            std::fprintf(stderr, "toolscheme: %s: %s\n", path.c_str(), failure.what());
-        }
-    }
+    // Published tools used to be loaded here, from $PREFIX/share/toolscheme/lib/
+    // tools and from a per-host directory under the state directory that
+    // `learn adopt` filled. The registry those files called into -- define-tool,
+    // tool-manifest, tool-invoke -- went with the substitution stack in 0.5.0,
+    // and this loader did not, so every previously-installed or adopted tool
+    // failed with "unbound symbol: define-tool" on every single invocation of
+    // the binary. Including every hook, where stderr is discarded: three error
+    // lines per tool call that nobody would ever see.
+    //
+    // Found by running a watcher stage with stderr attached for an unrelated
+    // reason. The lesson is that removing the caller is not removing the
+    // feature: the files outlive the install that put them there, so whatever
+    // loads them has to go too, and `make install` has to clear the ones it
+    // left behind.
     return true;
 }
 

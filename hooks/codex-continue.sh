@@ -4,8 +4,8 @@
 #
 # Codex has no turn-end hook to decline, so unlike the Claude Code path this is
 # a poll: it reads the rollout transcripts Codex already writes, and injects
-# through `codex queue`, which only reaches sessions launched against the app
-# server socket (see hooks/codex-session.sh).
+# through `codex queue`, which addresses Codex's own shared app-server daemon.
+# Nothing has to be launched specially for that to work any more.
 #
 # Does nothing at all unless TOOLSCHEME_CODEX_CONTINUE is on. Exits 0 whatever
 # happens: a watcher that fails loudly on a timer is worse than one that waits.
@@ -41,11 +41,6 @@ if [ -n "$CONFIG" ] && [ -r "$CONFIG" ]; then
   . "$CONFIG"
   set +a
 fi
-
-# Must match codex-shim.sh, which owns this path and keeps the directory at 0700
-# because Codex 0.156 refuses to bind a socket any other user could replace.
-TOOLSCHEME_CODEX_SOCKET="${TOOLSCHEME_CODEX_SOCKET:-$STATE/run/codex.sock}"
-export TOOLSCHEME_CODEX_SOCKET
 
 # Find codex wherever it has moved to.
 #

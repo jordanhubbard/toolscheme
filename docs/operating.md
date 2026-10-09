@@ -299,7 +299,7 @@ Off unless asked for:
 
 ```
 TOOLSCHEME_CONTINUE=1         # Claude Code, via the Stop hook
-TOOLSCHEME_CODEX_CONTINUE=1   # Codex, via the app server
+TOOLSCHEME_CODEX_CONTINUE=1   # Codex, via its own managed daemon
 TOOLSCHEME_CONTINUE_MAX=3     # bound, both
 ```
 

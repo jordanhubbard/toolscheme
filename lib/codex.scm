@@ -53,9 +53,12 @@
 (define (codex-stale-seconds) (codex-setting-number "TOOLSCHEME_CODEX_STALE"
                                                     codex-default-stale-seconds))
 
-(define (codex-socket)
+;; Kept only so a report can say which daemon a message went to, and empty
+;; unless someone sets it. Codex chooses where its managed daemon listens, so
+;; there is no socket for toolscheme to name -- and nothing left that needs one.
+(define (codex-daemon-note)
   (let ((configured (setting "TOOLSCHEME_CODEX_SOCKET")))
-    (if (and (string? configured) (not (string-null? configured))) configured "")))
+    (if (and (string? configured) (not (string-null? configured))) configured "codex-managed")))
 
 ;; The rollout file name ends with the thread id, which is exactly what `codex
 ;; queue --thread` wants. Taking it from the name rather than opening the file
@@ -287,15 +290,33 @@
 ;; delivered, so no evidence of a continuation ever appeared, so the count of
 ;; continuations stayed at zero and the next tick tried again. 431 times against
 ;; a cap of 2, on one thread, over twelve hours.
+;; No `--remote`. Codex runs its own shared app-server daemon now -- started by
+;; Codex, listening where Codex chooses -- and `codex queue` addresses it by
+;; default. Verified against a session launched with no special flags: the
+;; message queued, exit 0, and arrived in that session's rollout.
+;;
+;; This replaces the whole apparatus that used to be necessary: a `codex` shim
+;; installed earlier on PATH to add `--remote`, an app server toolscheme started
+;; and supervised, a socket in a directory we kept at 0700 because Codex 0.156
+;; refused to bind anything looser, a probe checking that `--remote` had survived
+;; the last update, and a PATH reorder in the user's shell profile so the shim
+;; would be found at all. All of it existed to put a session somewhere a message
+;; could reach it. Codex does that itself, so none of it is needed.
+;;
+;; There is no version check here, deliberately. An older Codex without the
+;; managed daemon will fail this call, and that failure is already handled the
+;; way every other delivery failure is: recorded as `continue-failed`, counted
+;; against the attempt bound, and the thread abandoned after three times the cap.
+;; A version number would be one more thing to keep true, and the DuckDB
+;; detection taught the same lesson -- probe the behaviour, do not assert the
+;; label.
 (define (codex-queue! thread message)
-  (let* ((socket (codex-socket))
-         (started (catch-errors
+  (let* ((started (catch-errors
                     (lambda ()
                       (process-start
                         (list (list 'program "codex")
                               (list 'arguments
                                     (list "queue"
-                                          "--remote" (string-append "unix://" socket)
                                           "--thread" thread
                                           "--message" message))
                               (list 'timeout-ms 30000)))))))

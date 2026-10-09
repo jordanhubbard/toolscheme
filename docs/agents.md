@@ -415,15 +415,14 @@ arithmetic rather than by someone noticing.
 ## Continuing Codex
 
 Codex has no turn-end hook, so there is no stop to decline. What it has instead
-is an app server: a session launched against one can be handed a message by
-`codex queue` while it sits idle. That only reaches sessions started with
-`--remote`, and nobody types a different command to start their editor. So the
-mechanism is a shim -- a `codex` installed earlier on PATH than the real one,
-which adds `--remote` and gets out of the way.
+is an app server -- and as of 0.162 it runs one itself: a shared, managed daemon
+that every session joins. `codex queue --thread <id> --message <text>` addresses
+that daemon by default, so a session sitting idle can be handed a message with no
+special launch and nothing installed ahead of it on PATH.
 
 ```
-make install-codex-shim     # symlinks ~/.local/bin/codex, schedules the watcher
-make uninstall-codex-shim   # removes both
+make install-codex-continue     # schedules the watcher
+make uninstall-codex-continue
 ```
 
 Then, in `~/.config/toolscheme/config`:
@@ -432,51 +431,37 @@ Then, in `~/.config/toolscheme/config`:
 TOOLSCHEME_CODEX_CONTINUE=1
 ```
 
-Without that line the shim is a pass-through and the watcher exits immediately,
-so the setting is the single switch rather than one of several that must agree.
-
-A wrapper around someone's main tool is only acceptable if it cannot make things
-worse, so three rules govern it:
-
-- **It never fails closed.** If the app server will not start -- or anything else
-  goes wrong -- it execs the real codex unchanged.
-- **It only adds `--remote` where a session can be continued at all.** `exec`,
-  `mcp`, `login` and the rest pass through untouched; a short non-interactive run
-  has no stall to recover.
-- **It never execs another copy of itself.** Copies recognise each other by an
-  embedded marker rather than by path, because running a checkout's copy while an
-  installed one sits on PATH would otherwise have each exec the other forever.
+Without that line the watcher exits immediately, so the setting is the single
+switch rather than one of several that must agree.
 
 Delivery is a poll rather than an event: `hooks/codex-continue.sh` reads the
 rollout transcripts Codex already writes and queues into threads that stalled
-after naming their own next step. On Linux `make install-codex-shim` schedules it
-as a systemd user timer, once a minute. Elsewhere, run it from cron or launchd --
-the target says so rather than pretending it scheduled anything.
+after naming their own next step. On Linux the target schedules it as a systemd
+user timer, once a minute; elsewhere run it from cron or launchd -- the target
+says so rather than pretending it scheduled anything.
 
-Two things to know before turning it on. It affects **sessions started after**
-the setting, so anything already running is not reachable. And every session
-shares one app-server process, which is a failure mode a plain `codex` does not
-have: if that process dies, the sessions attached to it go with it.
+It needs a Codex with the managed daemon; 0.162 is verified. On an older one the
+queue fails, which is recorded as `continue-failed` and counted against the
+attempt bound, so the thread is abandoned after three times the cap. There is no
+version check, deliberately: a version number is one more thing to keep true, and
+the behaviour is already probed by trying it.
 
-### When Codex updates itself
+### What this used to take
 
-`codex update` replaces the binary underneath the shim, and `--remote` belongs to
-`remote-control`, which Codex labels experimental. A release that drops or renames
-it would leave the shim handing Codex a flag it does not know, and every session
-would die because of a wrapper the user did not put on their PATH. So the shim
-checks the flag before using it and passes through unchanged when it is gone --
-a plain session is worth more than a continuable one. It also restarts the app
-server when the binary changes, since a server started by the old version
-survives the update and a new client would otherwise talk to a stale one.
+Until 0.162, `codex queue` reached only sessions started with `--remote` against
+an app server, and nobody types a different command to start their editor. So
+toolscheme installed a `codex` shim earlier on PATH to add the flag, ran and
+supervised the server itself, kept its socket in a 0700 directory because Codex
+0.156 refused to bind anything looser, probed each new Codex build to confirm
+`--remote` had survived, and -- once Homebrew took over the front of PATH --
+needed a line in the shell profile to be found at all. Five mechanisms, each
+guarding the one before it.
 
-Both checks key on the binary's size and mtime rather than running
-`codex --version`, so the common path is a `stat` and not a node startup in front
-of every launch. The answer is cached in `$STATE/run/capability`.
+All five are gone, and the lesson is worth more than the code was. The whole
+apparatus existed to put a session somewhere a message could reach it, which is
+something the vendor was always better placed to do. Fighting a provider's
+architecture is a holding action; plugging into it is not.
 
-What the shim cannot defend against is an installer that writes its own `codex`
-over the symlink in `~/.local/bin`. Nothing breaks if that happens -- you get
-ordinary Codex -- but continuation stops silently. `make install-codex-shim` is
-idempotent and puts it back.
 
 ## Serving the tools instead of substituting them
 
