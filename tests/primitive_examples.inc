@@ -71,7 +71,7 @@
 {"curl", "(curl '((url \"http://example.invalid/\")))", "(curl clock)"},
 {"cut", "(cut '(\"a:b\") '((separator \":\") (fields (1))))", "(cut 1)"},
 {"dash", "(dash '((command \"echo hi\")))", "(dash '())"},
-{"date", "(date '((epoch-seconds 0)))", "(date crypto)"},
+{"date", "(date '((iso \"2000-01-01T00:00:00Z\")))", "(date '((iso \"2026-W41-5\")))"},
 {"dd", "(dd '((from \"a.txt\") (to \"dd.txt\")))", "(dd '())"},
 {"df", "(df \".\")", "(df \"../outside\")"},
 {"diff", "(diff '(\"a\") '(\"b\"))", "(diff 1 2)"},

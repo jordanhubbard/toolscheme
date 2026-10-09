@@ -2509,6 +2509,120 @@ private:
 // Clock, system, terminal, crypto, shell, service, logging, desktop
 // ---------------------------------------------------------------------------
 
+// Days since 1970-01-01 from a civil date, by Howard Hinnant's algorithm. Not
+// `timegm`, which is available on all four platforms this is built for and is
+// therefore exactly the sort of assumption that produced the `statvfs`
+// allowlist. Six lines of arithmetic have no platform.
+std::int64_t days_from_civil(std::int64_t year, std::int64_t month, std::int64_t day) {
+    year -= month <= 2 ? 1 : 0;
+    const std::int64_t era = (year >= 0 ? year : year - 399) / 400;
+    const std::int64_t year_of_era = year - era * 400;
+    const std::int64_t day_of_year =
+        (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    const std::int64_t day_of_era =
+        year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    return era * 146097 + day_of_era - 719468;
+}
+
+// Reads an ISO 8601 / RFC 3339 instant. Returns false rather than guessing,
+// because a timestamp misread by an hour produces a plausible number and no
+// error, which is the worst outcome available.
+//
+// Accepted: extended (2026-10-09) and basic (20261009) dates; `T`, `t` or a
+// space before the time; extended (21:23:55) and basic (212355) times; reduced
+// precision down to hours, or a date with no time at all; a fraction after `.`
+// or `,`, which is read and discarded; and a zone of `Z`, `z`, `+HH:MM`,
+// `-HH:MM`, `+HHMM` or `+HH`. A missing zone is read as UTC, which is what
+// RFC 3339 forbids and ISO 8601 leaves to local convention -- the caller is told
+// which happened through the `zoned` field, so a caller that cares can refuse.
+//
+// Not accepted: week dates (2026-W41-5), ordinal dates (2026-282), negative or
+// expanded years, and leap seconds beyond :60.
+bool parse_iso_instant(const std::string& text, std::int64_t& seconds, bool& zoned) {
+    std::size_t at = 0;
+    const std::size_t size = text.size();
+    const auto digits = [&](std::size_t count, std::int64_t& out) {
+        if (at + count > size) return false;
+        std::int64_t value = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            const char c = text[at + i];
+            if (c < '0' || c > '9') return false;
+            value = value * 10 + (c - '0');
+        }
+        at += count;
+        out = value;
+        return true;
+    };
+    while (at < size && std::isspace(static_cast<unsigned char>(text[at]))) ++at;
+
+    std::int64_t year = 0, month = 1, day = 1;
+    if (!digits(4, year)) return false;
+    const bool extended = at < size && text[at] == '-';
+    if (extended) ++at;
+    if (!digits(2, month)) return false;
+    if (extended) {
+        if (at >= size || text[at] != '-') return false;
+        ++at;
+    }
+    if (!digits(2, day)) return false;
+
+    std::int64_t hour = 0, minute = 0, second = 0;
+    bool has_time = false;
+    if (at < size && (text[at] == 'T' || text[at] == 't' || text[at] == ' ')) {
+        ++at;
+        has_time = true;
+        if (!digits(2, hour)) return false;
+        const bool colons = at < size && text[at] == ':';
+        if (colons) ++at;
+        if (at + 1 < size && std::isdigit(static_cast<unsigned char>(text[at]))) {
+            if (!digits(2, minute)) return false;
+            if (colons && at < size && text[at] == ':') {
+                ++at;
+                if (!digits(2, second)) return false;
+            } else if (!colons && at + 1 < size &&
+                       std::isdigit(static_cast<unsigned char>(text[at]))) {
+                if (!digits(2, second)) return false;
+            }
+        }
+        if (at < size && (text[at] == '.' || text[at] == ',')) {
+            ++at;
+            if (at >= size || !std::isdigit(static_cast<unsigned char>(text[at]))) return false;
+            while (at < size && std::isdigit(static_cast<unsigned char>(text[at]))) ++at;
+        }
+    }
+
+    std::int64_t offset = 0;
+    zoned = false;
+    if (at < size) {
+        const char c = text[at];
+        if (c == 'Z' || c == 'z') {
+            ++at;
+            zoned = true;
+        } else if (c == '+' || c == '-') {
+            const std::int64_t sign = c == '-' ? -1 : 1;
+            ++at;
+            std::int64_t offset_hour = 0, offset_minute = 0;
+            if (!digits(2, offset_hour)) return false;
+            if (at < size && text[at] == ':') ++at;
+            if (at + 1 < size && std::isdigit(static_cast<unsigned char>(text[at])) &&
+                !digits(2, offset_minute))
+                return false;
+            if (offset_hour > 23 || offset_minute > 59) return false;
+            offset = sign * (offset_hour * 3600 + offset_minute * 60);
+            zoned = true;
+        }
+    }
+    while (at < size && std::isspace(static_cast<unsigned char>(text[at]))) ++at;
+    if (at != size) return false;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+    if (hour > 23 || minute > 59 || second > 60) return false;
+    (void)has_time;
+
+    seconds = days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second
+              - offset;
+    return true;
+}
+
 class PosixClock final : public ClockCapability {
 public:
     bool supports(std::string_view operation) const override {
@@ -2520,8 +2634,28 @@ public:
                  const std::vector<Value>& arguments) override {
         const Value options = arguments.empty() ? Value::nil() : arguments[0];
         if (operation == "date") {
-            const std::int64_t when = number_option(options, "epoch-seconds",
-                                                    static_cast<std::int64_t>(std::time(nullptr)));
+            // `(iso "...")` reads an instant instead of reporting now, so what
+            // this primitive prints it can also parse. Without it every caller
+            // that needed to read a timestamp wrote its own parser, and the
+            // first one ignored time zones -- being wrong by an hour with no
+            // error, on a corpus that happened never to carry an offset.
+            bool parsed_zone = false;
+            std::int64_t parsed = 0;
+            // Asked for by type rather than by value, because `string_option`
+            // answers "" for both an absent option and an explicitly empty one
+            // -- and those must differ: absent means report now, while an empty
+            // string is a caller handing over something it failed to read, which
+            // has to be an error rather than silently becoming the current time.
+            const Value supplied = option(options, "iso");
+            const bool reading = supplied.type() == Value::Type::String;
+            const std::string iso_in = reading ? std::string(supplied.as_string()) : std::string();
+            if (reading && !parse_iso_instant(iso_in, parsed, parsed_zone))
+                return error_result("not an ISO 8601 instant: " + iso_in,
+                                    "invalid-argument", "date");
+            const std::int64_t when =
+                reading ? parsed
+                        : number_option(options, "epoch-seconds",
+                                        static_cast<std::int64_t>(std::time(nullptr)));
             const bool utc = flag_option(options, "utc", true);
             const std::time_t stamp = static_cast<std::time_t>(when);
             struct tm parts {};
@@ -2538,6 +2672,11 @@ public:
             }
             return ok_result({field("epoch-seconds", when), field("iso", iso),
                               field("text", formatted), field("utc", utc),
+                              // Whether the input named a zone. A missing one is
+                              // read as UTC, which ISO 8601 leaves to local
+                              // convention and RFC 3339 forbids outright, so a
+                              // caller that cares is told rather than guessed at.
+                              field("zoned", reading ? parsed_zone : true),
                               field("year", static_cast<std::int64_t>(parts.tm_year + 1900)),
                               field("month", static_cast<std::int64_t>(parts.tm_mon + 1)),
                               field("day", static_cast<std::int64_t>(parts.tm_mday)),

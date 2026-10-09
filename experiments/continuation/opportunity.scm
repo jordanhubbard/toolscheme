@@ -47,82 +47,24 @@
                            "" content)))
               (list role text))))))
 
-;; Days since 1970-01-01 from a civil date. The first version of this multiplied
-;; the day-of-month by 86400, which is right inside one month and nonsense across
-;; a boundary: a thread spanning 30 September to 1 October produced a gap of
-;; minus 29 days, and the corpus spans three weeks. Counts that depend only on
-;; ordering survived that; every gap did not, which is why the arithmetic is
-;; exact here rather than approximate.
-(define (days-from-civil year month day)
-  (let* ((y (if (<= month 2) (- year 1) year))
-         (era (quotient (if (>= y 0) y (- y 399)) 400))
-         (yoe (- y (* era 400)))
-         (doy (+ (quotient (+ (* 153 (+ month (if (> month 2) -3 9))) 2) 5) (- day 1)))
-         (doe (+ (* yoe 365) (quotient yoe 4) (- (quotient yoe 100)) doy)))
-    (+ (* era 146097) doe -719468)))
-
-;; Parses the extended ISO 8601 / RFC 3339 form Codex writes:
-;; "2026-10-09T14:23:55.123Z", optionally with a +HH:MM or -HH:MM offset in
-;; place of the Z. The fraction is ignored -- a 90-second threshold cannot see
-;; it.
-;;
-;; This is not a general ISO 8601 parser and does not pretend to be. The standard
-;; also permits the basic form (20261009T142355Z), a comma as the decimal
-;; separator, lower-case designators, week and ordinal dates, and reduced
-;; precision. None of those appear here: all 4,859 timestamps in this corpus are
-;; 24 characters ending in Z.
-;;
-;; What matters is the failure mode. The first version read the digits at fixed
-;; offsets and ignored everything after the seconds, so a timestamp carrying
-;; `+01:00` would have been read as UTC and been wrong by an hour -- silently,
-;; producing a plausible gap rather than an error. "Works on the corpus I have"
-;; is how the statvfs platform allowlist and the DuckDB header check were both
-;; written. So the shape is checked, the offset is applied, and anything else
-;; returns #f to be excluded rather than guessed at.
-(define (two-at text index) (string->number (substring text index (+ index 1))))
-
-(define (iso-millis stamp)
-  (let ((n (string-length stamp)))
-    (if (or (< n 20)
-            (not (equal? (substring stamp 5 5) "-"))
-            (not (equal? (substring stamp 8 8) "-"))
-            (not (equal? (substring stamp 11 11) "T"))
-            (not (equal? (substring stamp 14 14) ":"))
-            (not (equal? (substring stamp 17 17) ":")))
-        #f
-        (let ((year (string->number (substring stamp 1 4)))
-              (month (two-at stamp 6))
-              (day (two-at stamp 9))
-              (hour (two-at stamp 12))
-              (minute (two-at stamp 15))
-              (second (two-at stamp 18))
-              (zone (substring stamp n n)))
-          (if (not (and (number? year) (number? month) (number? day)
-                        (number? hour) (number? minute) (number? second)))
-              #f
-              (let* ((utc (+ (* (days-from-civil year month day) 86400)
-                             (* hour 3600) (* minute 60) second))
-                     ;; An offset says how far local time is ahead of UTC, so it
-                     ;; is subtracted to get back to UTC.
-                     (sign-at (- n 5))
-                     (sign (if (> n 6) (substring stamp sign-at sign-at) ""))
-                     (offset
-                       (cond ((equal? zone "Z") 0)
-                             ((or (equal? sign "+") (equal? sign "-"))
-                              (let ((oh (two-at stamp (- n 4)))
-                                    (om (two-at stamp (- n 1))))
-                                (if (and (number? oh) (number? om))
-                                    (* (if (equal? sign "-") -1 1)
-                                       (+ (* oh 3600) (* om 60)))
-                                    #f)))
-                             (else #f))))
-                (if (number? offset) (* 1000 (- utc offset)) #f)))))))
+;; `(date '((iso ...)))` does the parsing. This file previously carried its own,
+;; which went wrong twice: first by multiplying day-of-month by 86400, which is
+;; right inside one month and gives minus 29 days from 30 September to 1 October,
+;; and then by reading the digits at fixed offsets and ignoring the zone, so a
+;; `+01:00` would have been an hour wrong with no error. Both were found by
+;; checking rather than by failing, which is the argument for one parser in the
+;; interpreter instead of one per caller.
 
 ;; Records whose timestamp cannot be read are excluded rather than treated as
-;; time zero, which would have manufactured enormous gaps.
+;; time zero, which would manufacture enormous gaps.
 (define (millis record)
-  (let ((parsed (iso-millis (field-ref record "timestamp" ""))))
-    (if (number? parsed) parsed #f)))
+  (let* ((stamp (field-ref record "timestamp" ""))
+         (parsed (if (string-null? stamp)
+                     #f
+                     (catch-errors (lambda () (date (list (list 'iso stamp))))))))
+    (if (or (not parsed) (error? parsed))
+        #f
+        (* 1000 (field-ref parsed 'epoch-seconds 0)))))
 
 (define (classify path)
   (let* ((text (let ((r (catch-errors (lambda () (read-file path '((limit 33554432)))))))

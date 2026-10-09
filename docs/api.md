@@ -103,6 +103,30 @@ There are 16 kinds: `filesystem`, `process`, `shell`, `terminal`, `clock`,
 (pwd workspace-fs '((output data)))     ; or an explicit one, passed first
 ```
 
+## Reading a timestamp
+
+`date` reports an instant, and reads one. What it prints it can parse:
+
+```scheme
+(date)                                        ; now
+(date '((epoch-seconds 0)))                   ; a given instant
+(date '((iso "2026-10-09T21:23:55.234Z")))    ; parsed; also +01:00, basic form,
+                                              ; comma decimals, a bare date
+```
+
+It answers `epoch-seconds` along with the broken-out fields, and a `zoned` flag
+saying whether the input named a zone — a missing one is read as UTC, which ISO
+8601 leaves to local convention and RFC 3339 forbids, so a caller that cares is
+told rather than guessed at. Week dates, ordinal dates and anything unparseable
+are refused with an error rather than approximated.
+
+This exists because callers were writing their own. The first one multiplied
+day-of-month by 86400, which gives minus 29 days from 30 September to 1 October;
+the second read digits at fixed offsets and ignored the zone, which would have
+been an hour wrong with no error on any input carrying an offset. One parser in
+the interpreter is the fix; `tests/iso-timestamp-check.scm` pins it against known
+epochs and against the forms it must refuse.
+
 Registration groups install only the primitives an installed capability actually
 backs, so a runtime with no process capability has no `git` primitive to deny —
 the operation is absent rather than present-and-refused. A denied operation
