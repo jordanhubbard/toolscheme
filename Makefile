@@ -139,6 +139,7 @@ loop: toolscheme
 	@$(call check-scheme,tests/classify-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/dogfood-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/sleep-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/iso-timestamp-check.scm --lib lib,(checks-hold #t))
 
 # The full gate: warning-clean optimized build, sanitizers, fuzzing, benchmarks,
 # and the loop.
