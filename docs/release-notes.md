@@ -1,59 +1,59 @@
-ToolScheme 0.5.2 runs on FreeBSD, and tests two claims that had only ever been read.
+ToolScheme 0.6.0 plugs into Codex's own app-server daemon instead of fighting it.
 
-Nothing here changes behaviour on Linux or macOS. It is a portability and
-verification release, and every item in it was found by running the code on a
-machine it had not been run on before.
+Breaking: `make install-codex-shim` and `make uninstall-codex-shim` are gone,
+replaced by `make install-codex-continue` and `make uninstall-codex-continue`.
+If you installed the shim, remove `~/.local/bin/codex` and any PATH ordering you
+added for it.
 
-## FreeBSD
+## What changed
 
-FreeBSD 16.0-CURRENT failed 8 of 1,686 checks on first contact. All three causes
-were real:
+Codex 0.162 runs its own shared, managed app-server daemon that every session
+joins, and `codex queue --thread <id> --message <text>` addresses it by default.
+Verified against a session started with no special flags: the message queued,
+exit 0, arrived in that session's rollout, and the session ran the step it had
+named.
 
-- **`df` did not work.** It reported "statvfs is unavailable on this platform".
-  `statvfs` is POSIX.1-2001 and the header was already included unconditionally;
-  the guard was an allowlist of the two platforms the code had been built on
-  rather than of the platforms that support the call.
-- **`ps`, `pgrep`, `pkill` and `uptime` were unimplemented.** FreeBSD uses the
-  same `sysctl` interface as macOS -- `KERN_BOOTTIME` is identical, so `uptime`
-  simply joins that branch -- but its `kinfo_proc` is flat, `ki_pid` and
-  `ki_comm` rather than a nested `kp_proc`, so the process table needs its own.
-- **Two tests assumed "not macOS" meant "Linux"**, and so required FreeBSD to
-  produce a working `systemctl`. An init system belongs to one platform and on a
-  third is neither, which cannot be written as an either/or.
+Until then, `codex queue` reached only sessions started with `--remote` against
+an app server -- and nobody types a different command to start their editor. So
+this project had built five mechanisms, each guarding the one before it:
 
-FreeBSD now passes 1,680 checks and all 12 loop checks. `scripts/package.py`
-knows the platform and uses `gmake`, since a BSD `make` cannot parse this
-Makefile.
+- a `codex` shim installed earlier on PATH, to add the flag
+- an app server toolscheme started and supervised
+- a socket in a directory kept at 0700, because Codex 0.156 refused looser
+- a probe checking `--remote` had survived the last Codex update
+- a line in the shell profile, once Homebrew took the front of PATH and
+  shadowed the shim
 
-## Concurrency, now tested
+All five are deleted. The remaining mechanism is a supported CLI call against
+the vendor's own daemon.
 
-`docs/agents.md` claimed concurrent sessions were safe because records are
-clipped below `PIPE_BUF` and appended with `O_APPEND`. Nothing exercised it,
-while the hook is installed globally and every session on the machine appends to
-one file.
+There is deliberately no version check. An older Codex fails the queue, which is
+already handled the way every delivery failure is: recorded as `continue-failed`,
+counted against the attempt bound, and the thread abandoned after three times the
+cap. A version number would be one more thing to keep true.
 
-`tests/concurrent-hooks.sh` now runs dozens of hooks at once and checks that
-every record parses, that none is lost, and that the clip lands where it is
-supposed to. 480 appends from 48 writers on Linux, none torn.
+## Also fixed
 
-The claim holds; the stated reason was wrong. `PIPE_BUF` bounds atomic writes to
-pipes, not to files. What makes this safe is that `O_APPEND` on a regular file
-makes the seek-to-end and the write one atomic step at any size. FreeBSD makes
-the difference visible: its `PIPE_BUF` is 512 against Linux's 4096, and
-2,808-byte records still arrive intact under 32 concurrent writers. Believing the
-old explanation would have meant concluding FreeBSD was unsafe, or clipping
-records to 512 bytes for no benefit.
+Every previously-installed or adopted tool had been failing with "unbound symbol:
+define-tool" on **every invocation of the binary** since 0.5.0. The registry
+those files call into was removed then; the loader that reads them was not. In a
+hook, where stderr is discarded, that was three error lines per tool call that
+nobody could see.
 
-## musl
+The loader is gone, and `make install` now clears the files an older install left
+behind. Removing a feature is not finished while its artifacts are still on disk
+being loaded.
 
-Alpine/aarch64 passes 1,683 checks and 12 loop checks on overlayfs -- a different
-C library than any previous test, and the strongest evidence so far for the
-dependency-free claim.
+## What this cost, measured
 
-It also found that DuckDB was enabled whenever `duckdb.h` existed, so a vendored
-glibc build broke the link on musl instead of falling back to no DuckDB.
-Detection now compiles and links a probe, and a library that cannot be used is
-treated exactly like one that is not there.
+The hook taxes every tool call: 17ms per event, 23ms per call across the corpus.
+The sleep refusal is still the only mechanism with a measured saving -- time in
+fixed waits fell from 69ms per call before it to 4ms in the most recent week,
+with long waits going 32 to 3. Net about 42ms saved per call, roughly 2.8 to 1.
+
+Codex continuation has delivered two continuations in its existence, both in
+controlled tests. It is simpler now than it has ever been, which makes the coming
+weeks the first fair trial of whether it is worth having at all.
 
 ## Known gap
 
