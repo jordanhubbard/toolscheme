@@ -33,11 +33,12 @@ ifneq ($(wildcard $(DUCKDB_DIR)/duckdb.h),)
   # The probe has to *call* something, or it links vacuously: a `main` that
   # references no DuckDB symbol succeeds against a library the real build cannot
   # use, which is exactly what the first version of this did.
-  DUCKDB_USABLE := $(shell printf '#include "duckdb.h"\nint main(void){return duckdb_library_version()==0;}\n' \
-        > .duckdb-probe.cpp 2>/dev/null && \
-      $(CXX) -std=c++17 .duckdb-probe.cpp -I$(DUCKDB_DIR) -L$(DUCKDB_DIR) -lduckdb \
+  # Keep the preprocessor directive outside $(shell ...): GNU Make 3.81 on
+  # macOS treats its hash as a Make comment even inside shell quotes.
+  DUCKDB_USABLE := $(shell $(CXX) -std=c++17 scripts/duckdb-probe.cpp \
+        -I$(DUCKDB_DIR) -L$(DUCKDB_DIR) -lduckdb \
         -o .duckdb-probe.out >/dev/null 2>&1 && echo yes; \
-      rm -f .duckdb-probe.cpp .duckdb-probe.out)
+      rm -f .duckdb-probe.out)
 endif
 ifeq ($(DUCKDB_USABLE),yes)
   DUCKDB_FLAGS = -DTOOLSCHEME_DUCKDB -I$(DUCKDB_DIR)
