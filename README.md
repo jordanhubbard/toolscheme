@@ -12,6 +12,10 @@ second half of it does not hold -- a substitution has no axis left to win on,
 because byte-identity makes the byte count equal by construction and a shell call
 composes where a tool call does not. The whole substitution stack was removed in
 0.5.0. The argument, with the measurements, is in `docs/relevance.md`.
+The [research retrospective](docs/research-retrospective.md) records the original
+goals, methods, negative and positive results, current host cost, and conditions
+that would need to change before further work made sense. It is a record, not a
+project plan.
 
 What it is now is an instrument that can also enforce policy: it records what
 agents call, it answers questions about that corpus in a language that is already

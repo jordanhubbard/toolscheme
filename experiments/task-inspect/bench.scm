@@ -1,0 +1,32 @@
+;;; In-process timing for the source-location question in compare.scm.
+;;; Run: toolscheme experiments/task-inspect/bench.scm --lib lib
+;;; A/B/B/A limits cache and order effects. MCP and model time are excluded.
+
+(define query "define (simple-poll-path")
+(define roots '("."))
+(define repetitions 300)
+(define (baseline)
+  (let* ((found (search query roots '((literal #t)
+                                     (include ("lib/dogfood.scm")) (limit 8))))
+         (hit (car (field-ref found 'matches '())))
+         (line (field-ref hit 'line 0)))
+    (read-file (field-ref hit 'path "")
+               (list (list 'first-line (max 1 (- line 4)))
+                     (list 'last-line (+ line 4))))))
+(define (candidate)
+  (inspect query roots '((include ("lib/dogfood.scm"))
+                         (context 4) (limit 8))))
+(define (elapsed thunk)
+  (let ((start (field-ref (time) 'monotonic-nanoseconds 0)))
+    (let loop ((i 0))
+      (if (< i repetitions)
+          (begin (thunk) (loop (+ i 1)))
+          (- (field-ref (time) 'monotonic-nanoseconds 0) start)))))
+
+(baseline)
+(candidate)
+(list (list 'repetitions-per-block repetitions)
+      (list 'baseline-first-ns (elapsed baseline))
+      (list 'inspect-first-ns (elapsed candidate))
+      (list 'inspect-second-ns (elapsed candidate))
+      (list 'baseline-second-ns (elapsed baseline)))
