@@ -29,6 +29,11 @@
 # Adds a note to the model's context. Never changes what a call returns.
 TOOLSCHEME_STEER=1
 
+# Refuse only the measured simple local-file polling loop:
+# while [ ! -e FILE ]; do sleep 1; done
+# It points to wait-for. Other loops and remote polling remain available.
+# TOOLSCHEME_REFUSE_POLL=1
+
 # Replaces a call with a published tool. Allowed only for a command shape that a
 # tool has been proven to reproduce byte for byte, exit status included, and only
 # when the command was going to print enough to be worth the substitution.

@@ -19,11 +19,9 @@
           ((equal? (field-ref (car rest) "name" "") name) (car rest))
           (else (loop (cdr rest))))))
 
-;; Only `toolscheme_eval` is served now. The published tools went with the
-;; substitution stack; what is left is the one shape that takes composed work in
-;; a single call, which is the only shape that could compete with a shell. See
-;; docs/relevance.md.
+;; The task-shaped inspector and composed evaluator are the two supported tools.
 (define builtin (tool-named "toolscheme_eval"))
+(define inspector (tool-named "toolscheme_inspect"))
 (define schema (field-ref builtin "inputSchema" '()))
 (define properties (field-ref schema "properties" '()))
 
@@ -46,16 +44,26 @@
   (result-of (string-append "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\","
                             "\"params\":{\"name\":\"toolscheme_eval\","
                             "\"arguments\":{\"expression\":\"(+ 20 22)\"}}}")))
+(define inspect-call
+  (result-of "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"toolscheme_inspect\",\"arguments\":{\"pattern\":\"mcp-call\",\"roots\":[\".\"],\"include\":[\"lib/mcp.scm\"],\"context\":1,\"limit\":1}}}"))
+(define bad-inspect-call
+  (result-of "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"toolscheme_inspect\",\"arguments\":{\"pattern\":\"x\",\"limit\":0}}}"))
 
 (define checks
   (list (list 'protocol-version (field-ref initialize "protocolVersion" ""))
         (list 'lists-builtin (not (null? (tool-named "toolscheme_eval"))))
-        (list (quote serves-only-the-builtin) (= (length tools) 1))
+        (list 'lists-inspector (not (null? inspector)))
+        (list 'serves-two-tools (= (length tools) 2))
         (list 'schema-properties-is-object (json-object? properties))
         (list 'schema-required (field-ref schema "required" '()))
         (list 'eval-works (string-contains? (field-ref (car (field-ref eval-call "content" '()))
                                                        "text" "")
                                             "42"))
+        (list 'inspect-has-context (string-contains? (field-ref (car (field-ref inspect-call "content" '()))
+                                                            "text" "") "(after"))
+        (list 'inspect-reports-truncation (string-contains? (field-ref (car (field-ref inspect-call "content" '()))
+                                                                  "text" "") "(truncated #t)"))
+        (list 'bad-inspect-is-error (field-ref bad-inspect-call "isError" #f))
         (list 'missing-tool-is-error (field-ref failing-call "isError" #f))
         (list 'unknown-method-is-rpc-error
               (= (field-ref (field-ref unknown-method "error" '()) "code" 0) -32601))
@@ -67,9 +75,13 @@
       (list 'checks-hold
             (and (equal? (field-ref initialize "protocolVersion" "") mcp-protocol-version)
                  (not (null? (tool-named "toolscheme_eval")))
-                 (= (length tools) 1)
+                 (not (null? inspector))
+                 (= (length tools) 2)
                  (json-object? properties)
                  (member "expression" (field-ref schema "required" (quote ())))
+                 (string-contains? (field-ref (car (field-ref inspect-call "content" '())) "text" "") "(after")
+                 (string-contains? (field-ref (car (field-ref inspect-call "content" '())) "text" "") "(truncated #t)")
+                 (field-ref bad-inspect-call "isError" #f)
                  (field-ref failing-call "isError" #f)
                  (= (field-ref (field-ref unknown-method "error" '()) "code" 0) -32601)
                  (= (field-ref (field-ref malformed "error" '()) "code" 0) -32700)

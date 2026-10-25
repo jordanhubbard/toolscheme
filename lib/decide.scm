@@ -92,6 +92,7 @@
 
 (define (tool-decision-with-rule request)
   (let* ((waited (catch-errors (lambda () (sleep-decision request))))
+         (polled (catch-errors (lambda () (poll-decision request))))
          (refused (catch-errors (lambda () (dogfood-decision request))))
          (bounded (catch-errors (lambda () (bound-read-decision request))))
          (advice (catch-errors (lambda () (steer-advice request))))
@@ -101,6 +102,7 @@
       ;; not run. The wait is checked first because it is the larger waste and
       ;; the more specific complaint.
       ((and (not (error? waited)) waited) (cons "refuse-sleep" waited))
+      ((and (not (error? polled)) polled) (cons "refuse-poll" polled))
       ((and (not (error? refused)) refused) (cons "dogfood" refused))
       ;; A bounded read is a complete decision on its own.
       ((and (not (error? bounded)) bounded) (cons "bound-read" bounded))

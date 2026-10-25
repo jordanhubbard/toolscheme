@@ -114,7 +114,7 @@ std::string locate_library(const std::string& explicit_path) {
 
 bool load_library(Interpreter& vm, const std::string& directory, std::string& error) {
     // Order matters: later files build on earlier ones.
-    static const char* files[] = {"prelude.scm", "agentlog.scm", "analysis.scm",
+    static const char* files[] = {"prelude.scm", "inspect.scm", "agentlog.scm", "analysis.scm",
                                   "credential.scm", "mcp.scm", "hooks.scm",
                                   "steer.scm", "continue.scm",
                                   "codex.scm", "classify.scm",

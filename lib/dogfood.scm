@@ -212,3 +212,41 @@
   (if (refuse-sleep-enabled?)
       (sleep-refusal request (refuse-sleep-threshold-ms))
       #f))
+
+;;; A second, much narrower wait refusal. The controlled adoption trial observed
+;;; `while [ ! -e FILE ]; do sleep 1; done` in every uninstructed run. It is a
+;;; local file wait with an exact event-driven replacement. Keep this opt-in and
+;;; deliberately decline variations we have not measured or parsed precisely.
+(define (simple-poll-path command)
+  (let* ((text (string-trim command))
+         (prefix "while [ ! -e ")
+         (suffix " ]; do sleep 1; done"))
+    (if (or (not (string-prefix? prefix text))
+            (not (string-suffix? suffix text))
+            (<= (string-length text) (+ (string-length prefix) (string-length suffix))))
+        #f
+        (let ((path (substring text (+ (string-length prefix) 1)
+                               (- (string-length text) (string-length suffix)))))
+          (if (or (string-null? path)
+                  (any? (lambda (bad) (string-contains? path bad))
+                        '(" " "\t" "\n" "'" "\"" "`" "$" ";" "&" "|" "<" ">" "(" ")")))
+              #f path)))))
+
+(define (poll-refusal request)
+  (let ((path (and (equal? (field-ref request "hook_event_name" "") "PreToolUse")
+                   (shell-tool? (field-ref request "tool_name" "")
+                                (field-ref request "tool_input" '()))
+                   (simple-poll-path
+                     (hook-command-of (field-ref request "tool_input" '()))))))
+    (if (not path) #f
+        (list (list "hookSpecificOutput"
+                    (list (list "hookEventName" "PreToolUse")
+                          (list "permissionDecision" "deny")
+                          (list "permissionDecisionReason"
+                                (string-append
+                                  "This polls once a second for a local file. Use the event wait: toolscheme -e '(wait-for (quote (exists \""
+                                  path "\")))'. It returns as soon as the file exists. "
+                                  "Unset TOOLSCHEME_REFUSE_POLL to lift this rule."))))))))
+
+(define (poll-decision request)
+  (if (setting-on? "TOOLSCHEME_REFUSE_POLL") (poll-refusal request) #f))

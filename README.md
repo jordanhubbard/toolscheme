@@ -115,6 +115,7 @@ behind it. Advice was measured twice and read past both times; a denial cannot b
 
 ```sh
 TOOLSCHEME_REFUSE_SLEEP=1     # decline a fixed wait of ten seconds or more
+TOOLSCHEME_REFUSE_POLL=1      # decline the simple local-file polling loop
 TOOLSCHEME_DOGFOOD=<paths>    # inside named trees, decline what this replaces
 ```
 
@@ -188,6 +189,21 @@ reach the host directly. Reference POSIX adapters for Linux and macOS live in
 environment allowlist, output and timeout limits).
 
 ## Tools
+
+For a code-location question, `inspect` returns matching lines and nearby
+context in one bounded call. It is also published as `toolscheme_inspect` over
+MCP, with named `pattern`, `roots`, `include`, `context`, and `limit` arguments:
+
+```sh
+toolscheme -e '(inspect "run_search" (list ".") (quote ((include ("*.cpp")) (context 4) (limit 8))))'
+```
+
+Check `truncated` before treating the result as complete. This task-shaped call
+targets the observed search-then-read sequence. The reproducible
+`experiments/task-inspect/compare.scm` fixture finds the same source location in
+one call instead of two and returns 717 rather than 764 bytes. That small fixture
+does not establish a task-level productivity gain; adoption and follow-up reads
+still need to be measured in real sessions.
 
 Text tools accept inline data *or* a tagged source that names files, so the shapes
 agents actually reach for work directly:

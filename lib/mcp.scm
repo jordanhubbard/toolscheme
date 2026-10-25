@@ -1,8 +1,8 @@
 ;;; mcp.scm -- the Model Context Protocol server, in Scheme.
 ;;;
 ;;; The binary only moves lines of JSON on stdio; the protocol lives here, so it
-;;; can be changed without a rebuild. Every published tool becomes an MCP tool,
-;;; and `toolscheme_eval` exposes the interpreter itself.
+;;; can be changed without a rebuild. The task-shaped inspector and evaluator
+;;; are the supported MCP tools.
 
 (define mcp-protocol-version "2025-06-18")
 
@@ -31,6 +31,22 @@
 
 (define (mcp-builtin-tools)
   (list
+    (list (list "name" "toolscheme_inspect")
+          (list "description"
+                "Find a pattern in repository files and return matching lines with nearby context, paths, and line numbers in one bounded call. The result reports truncation. Use for locating code before opening whole files.")
+          (list "inputSchema"
+                (list (list "type" "object")
+                      (list "properties"
+                            (list (list "pattern" (list (list "type" "string")))
+                                  (list "roots" (list (list "type" "array")
+                                                      (list "items" (list (list "type" "string")))))
+                                  (list "include" (list (list "type" "array")
+                                                        (list "items" (list (list "type" "string")))))
+                                  (list "context" (list (list "type" "integer")
+                                                        (list "minimum" 0) (list "maximum" 20)))
+                                  (list "limit" (list (list "type" "integer")
+                                                      (list "minimum" 1) (list "maximum" 50)))))
+                      (list "required" (list "pattern")))))
     (list (list "name" "toolscheme_eval")
           (list "description"
                 (string-append
@@ -46,26 +62,32 @@
                                               (list "description" "The expression to evaluate.")))))
                       (list "required" (list "expression")))))))
 
-;; Only `toolscheme_eval` is served. The published tools that used to appear here
-;; were removed with the substitution stack: measured against the corpus they had
-;; no axis left to win on, because a shell call is a program in a language while
-;; a tool call is one operation, and 44% of real calls compose more than one
-;; program. `toolscheme_eval` is the exception -- it takes composed work in a
-;; single call, which is the only shape that could compete. Whether an agent ever
-;; reaches for it is a separate question, and an open one.
+;; The published one-command replacements were removed with the substitution
+;; stack. These two tools take a whole inspection task or composed work in one
+;; call, which is the shape the corpus identified as potentially useful.
 (define (mcp-tools) (mcp-builtin-tools))
 
 (define (mcp-call name arguments)
-  (if (string=? name "toolscheme_eval")
-      (let ((expression (field-ref arguments "expression")))
-        (if (not (string? expression))
-            (mcp-failure-content "toolscheme_eval needs an `expression` string")
-            (let ((outcome (catch-errors
-                             (lambda () (list (list 'value (eval (read-from-string expression))))))))
-              (if (error? outcome)
-                  (mcp-failure-content (field-ref outcome 'error))
-                  (mcp-content (write-to-string (field-ref outcome 'value)))))))
-      (mcp-failure-content (string-append "unknown tool: " name))))
+  (if (string=? name "toolscheme_inspect")
+      (let ((outcome (catch-errors
+                       (lambda () (inspect (field-ref arguments "pattern" #f)
+                                           (field-ref arguments "roots" '("."))
+                                           (list (list 'include (field-ref arguments "include" '()))
+                                                 (list 'context (field-ref arguments "context" 4))
+                                                 (list 'limit (field-ref arguments "limit" 8))))))))
+        (if (error? outcome)
+            (mcp-failure-content (write-to-string outcome))
+            (mcp-content (write-to-string outcome))))
+      (if (string=? name "toolscheme_eval")
+          (let ((expression (field-ref arguments "expression")))
+            (if (not (string? expression))
+                (mcp-failure-content "toolscheme_eval needs an `expression` string")
+                (let ((outcome (catch-errors
+                                 (lambda () (list (list 'value (eval (read-from-string expression))))))))
+                  (if (error? outcome)
+                      (mcp-failure-content (field-ref outcome 'error))
+                      (mcp-content (write-to-string (field-ref outcome 'value)))))))
+          (mcp-failure-content (string-append "unknown tool: " name)))))
 
 ;; What a client is told on connect.
 ;;
@@ -81,7 +103,10 @@
 ;; introduction.
 (define mcp-introduction
   (string-append
-    "Evaluates toolscheme expressions and returns association lists rather than "
+    "Use toolscheme_inspect to locate code and get nearby lines in one bounded call: "
+    "pattern is required; roots, include, context, and limit are optional. "
+    "Check truncated before treating results as complete.\n\n"
+    "toolscheme_eval evaluates toolscheme expressions and returns association lists rather than "
     "text to be scraped. Identical calls return identical bytes, so repeating one "
     "costs nothing in a cached prompt prefix.\n\n"
     "Worth reaching for when a shell command would need parsing afterwards: "

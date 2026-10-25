@@ -129,6 +129,7 @@ loop: toolscheme
 	@rm -rf .check-root && mkdir -p .check-root
 	@$(call check-scheme,tests/hook-check.scm --lib lib --root .check-root,(checks-hold #t))
 	@$(call check-scheme,tests/mcp-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/inspect-check.scm --lib lib,(checks-hold #t))
 	@rm -rf .check-root && mkdir -p .check-root
 	@$(call check-scheme,tests/decide-check.scm --lib lib --root .check-root,(checks-hold #t))
 	@rm -rf .check-root
@@ -140,6 +141,7 @@ loop: toolscheme
 	@$(call check-scheme,tests/classify-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/dogfood-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/sleep-check.scm --lib lib,(checks-hold #t))
+	@$(call check-scheme,tests/poll-check.scm --lib lib,(checks-hold #t))
 	@$(call check-scheme,tests/iso-timestamp-check.scm --lib lib,(checks-hold #t))
 
 # The full gate: warning-clean optimized build, sanitizers, fuzzing, benchmarks,
